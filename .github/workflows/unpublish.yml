@@ -1,0 +1,83 @@
+name: Unpublish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to unpublish or deprecate (e.g. 1.2.3 or v1.2.3).'
+        required: true
+        type: string
+      mode:
+        description: 'Action to perform.'
+        required: true
+        type: choice
+        options:
+          - unpublish (within 24h only)
+          - deprecate
+      deprecation_message:
+        description: 'Deprecation message (required for "deprecate" mode, ignored for "unpublish").'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to unpublish or deprecate (e.g. 1.2.3 or v1.2.3).'
+        required: true
+        type: string
+      mode:
+        description: 'Action to perform: "unpublish" (within 24h only) or "deprecate".'
+        required: true
+        type: string
+      deprecation_message:
+        description: 'Deprecation message (required for "deprecate" mode, ignored for "unpublish").'
+        required: false
+        type: string
+    secrets:
+      NPM_TOKEN:
+        required: true
+
+jobs:
+  unpublish:
+    if: github.repository == 'SecretX33/mcp-filter-proxy'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Sanitize version
+        id: sanitize
+        uses: ./.github/actions/sanitize-version
+        with:
+          version: ${{ inputs.version }}
+
+      - name: Validate inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          DEPRECATION_MESSAGE: ${{ inputs.deprecation_message }}
+        run: |
+          if [[ "$MODE" == deprecate* ]] && [ -z "$DEPRECATION_MESSAGE" ]; then
+            echo "::error::Deprecation message is required when using 'deprecate' mode."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Unpublish from NPM
+        if: startsWith(inputs.mode, 'unpublish')
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.sanitize.outputs.version }}
+        run: npm unpublish "mcp-filter-proxy@${VERSION}"
+
+      - name: Deprecate on NPM
+        if: startsWith(inputs.mode, 'deprecate')
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.sanitize.outputs.version }}
+          DEPRECATION_MESSAGE: ${{ inputs.deprecation_message }}
+        run: npm deprecate "mcp-filter-proxy@${VERSION}" "$DEPRECATION_MESSAGE"

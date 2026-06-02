@@ -1,0 +1,55 @@
+{
+  "name": "mcp-filter-proxy",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "MCP proxy that wraps any server to filter exposed tools and bridge across different transports (stdio, SSE, HTTP)",
+  "author": "SecretX33 <notyetmidnight@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/SecretX33/mcp-filter-proxy#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SecretX33/mcp-filter-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SecretX33/mcp-filter-proxy/issues"
+  },
+  "bin": {
+    "mcp-filter-proxy": "./dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "proxy"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch --env.NODE_ENV=development",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "format": "prettier --check --cache src tests",
+    "format:write": "prettier --write --cache src tests"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "express": "5.2.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "25.9.1",
+    "@typescript/native-preview": "7.0.0-dev.20260328.1",
+    "prettier": "3.8.3",
+    "tsdown": "0.22.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.6"
+  }
+}
