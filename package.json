@@ -1,7 +1,7 @@
 {
   "name": "mcp-filter-proxy",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "MCP proxy that wraps any server to filter exposed tools and bridge across different transports (stdio, SSE, HTTP)",
   "author": "SecretX33 <notyetmidnight@gmail.com>",
   "license": "MIT",
