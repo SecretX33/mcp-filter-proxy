@@ -7,6 +7,14 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import { PROJECT_INFO } from "../util.js";
+
+/**
+ * Default root for cached OAuth state. Versioned so a proxy upgrade starts from a clean cache
+ * instead of reusing a registration/token that an older version may have written differently.
+ */
+const defaultRoot = (): string =>
+  join(homedir(), ".mcp-auth", `mcp-filter-proxy-${PROJECT_INFO.version}`, "oauth");
 
 /**
  * File-backed persistence for one upstream server's OAuth session (tokens, dynamically
@@ -17,7 +25,7 @@ export class FileAuthStore {
   private readonly dir: string;
 
   constructor(serverUrl: string, baseDir?: string | null) {
-    const root = baseDir ?? join(homedir(), ".mcp-filter-proxy", "oauth");
+    const root = baseDir ?? defaultRoot();
     const key = createHash("sha256").update(serverUrl).digest("hex").slice(0, 16);
     this.dir = join(root, key);
   }

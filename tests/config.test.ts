@@ -122,6 +122,49 @@ describe("parseConfig", () => {
     expect(config.exposeHost).toBe("127.0.0.1");
   });
 
+  // --- Upstream auth ---
+
+  it("defaults the static auth scheme to bearer and callback port to 8661", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+      },
+      argv: ["node", "index.js"],
+    });
+    expect(config.auth.mode).toBe("auto");
+    expect(config.auth.token).toBeNull();
+    expect(config.auth.tokenScheme).toBe("bearer");
+    expect(config.auth.callbackPort).toBe(8661);
+  });
+
+  it("parses the basic auth scheme and a static token", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+        MCP_FILTER_PROXY_AUTH_TOKEN: "dXNlcjpwYXNz",
+        MCP_FILTER_PROXY_AUTH_SCHEME: "basic",
+      },
+      argv: ["node", "index.js"],
+    });
+    expect(config.auth.token).toBe("dXNlcjpwYXNz");
+    expect(config.auth.tokenScheme).toBe("basic");
+  });
+
+  it("throws if MCP_FILTER_PROXY_AUTH_SCHEME is invalid", () => {
+    expect(() =>
+      parseConfig({
+        env: {
+          MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+          MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+          MCP_FILTER_PROXY_AUTH_SCHEME: "digest",
+        },
+        argv: ["node", "index.js"],
+      }),
+    ).toThrow("MCP_FILTER_PROXY_AUTH_SCHEME");
+  });
+
   // --- Validation ---
 
   it("throws if MCP_FILTER_PROXY_UPSTREAM_TRANSPORT is missing", () => {

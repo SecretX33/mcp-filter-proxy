@@ -7,7 +7,7 @@ import { createToolFilter } from "./filter.js";
 import { createStdioUpstream } from "./transports/upstream-stdio.js";
 import { createSSEUpstream } from "./transports/upstream-sse.js";
 import { createHTTPUpstream } from "./transports/upstream-http.js";
-import { buildUpstreamAuth } from "./auth/index.js";
+import { buildUpstreamAuth } from "./auth";
 import { startProxy } from "./proxy.js";
 import { PROJECT_INFO } from "./util";
 

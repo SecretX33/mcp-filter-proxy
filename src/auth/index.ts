@@ -21,12 +21,7 @@ export type UpstreamAuth =
   | { kind: "oauth"; authProvider: OAuthClientProvider; runtime: OAuthRuntime };
 
 /**
- * Resolves which authentication strategy to use for an http/sse upstream and wires it up:
- *
- * - a static `Authorization: Bearer` header when `authToken` is set (highest precedence);
- * - otherwise, unless disabled, an interactive `OAuthClientProvider` that only triggers a
- *   browser flow when the upstream actually returns 401;
- * - `none` for stdio upstreams or when explicitly disabled with no token.
+ * Resolves which authentication strategy to use for an http/sse upstream and wires it up.
  */
 export async function buildUpstreamAuth(
   config: ProxyConfig,
@@ -36,11 +31,12 @@ export async function buildUpstreamAuth(
   if (config.transport === "stdio") return { kind: "none" };
 
   if (auth.token) {
-    console.error("Using static bearer token for upstream authentication");
+    const scheme = auth.tokenScheme === "basic" ? "Basic" : "Bearer";
+    console.error(`Using static ${scheme} credential for upstream authentication`);
     return {
       kind: "static",
       requestInit: {
-        headers: { Authorization: `Bearer ${auth.token}` },
+        headers: { Authorization: `${scheme} ${auth.token}` },
       },
     };
   }

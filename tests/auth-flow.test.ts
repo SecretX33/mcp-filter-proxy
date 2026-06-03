@@ -143,12 +143,10 @@ async function startMockServer(): Promise<MockServer> {
         "WWW-Authenticate",
         `Bearer error="invalid_token", resource_metadata="${base}/.well-known/oauth-protected-resource"`,
       );
-      res
-        .status(401)
-        .json({
-          error: "invalid_token",
-          error_description: "Missing or invalid access token",
-        });
+      res.status(401).json({
+        error: "invalid_token",
+        error_description: "Missing or invalid access token",
+      });
       return;
     }
     const transport = new StreamableHTTPServerTransport({
@@ -210,6 +208,7 @@ describe("interactive upstream OAuth flow", () => {
     auth: {
       mode: "auto",
       token: null,
+      tokenScheme: "bearer",
       callbackPort,
       scope: null,
       clientName: "Test Proxy",

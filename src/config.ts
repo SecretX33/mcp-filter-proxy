@@ -27,6 +27,7 @@ export interface ProxyConfig {
 }
 
 export type UpstreamAuthMode = "auto" | "none";
+export type StaticAuthScheme = "bearer" | "basic";
 
 export interface UpstreamAuthConfig {
   /**
@@ -35,8 +36,13 @@ export interface UpstreamAuthConfig {
    * A static `token` always takes precedence over both.
    */
   mode: UpstreamAuthMode;
-  /** Pre-obtained bearer token sent as `Authorization: Bearer <token>` to the upstream. */
+  /** Pre-obtained credential sent as `Authorization: <scheme> <token>` to the upstream. */
   token: string | null;
+  /**
+   * HTTP auth scheme for `token`. The value is sent verbatim after the scheme word, so for
+   * `basic` the token must already be the base64 encoding of `username:password`.
+   */
+  tokenScheme: StaticAuthScheme;
   /** Loopback port the OAuth redirect callback server listens on. */
   callbackPort: number;
   /** OAuth scope to request, or null to let the server decide. */
@@ -74,12 +80,13 @@ export const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => v ?? null),
+  MCP_FILTER_PROXY_AUTH_SCHEME: z.enum(["bearer", "basic"]).default("bearer"),
   MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT: z.coerce
     .number()
     .int()
     .min(1)
     .max(65535)
-    .default(8909),
+    .default(8661),
   MCP_FILTER_PROXY_OAUTH_SCOPE: z
     .string()
     .optional()
@@ -138,6 +145,7 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
     auth: {
       mode: parsedEnv.MCP_FILTER_PROXY_UPSTREAM_AUTH,
       token: parsedEnv.MCP_FILTER_PROXY_AUTH_TOKEN,
+      tokenScheme: parsedEnv.MCP_FILTER_PROXY_AUTH_SCHEME,
       callbackPort: parsedEnv.MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT,
       scope: parsedEnv.MCP_FILTER_PROXY_OAUTH_SCOPE,
       clientName: parsedEnv.MCP_FILTER_PROXY_OAUTH_CLIENT_NAME,
