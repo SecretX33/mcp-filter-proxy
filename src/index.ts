@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from "child_process";
-import { loadConfigOrExit, stripProxyEnv } from "./config.js";
-import { createToolFilter } from "./filter.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { loadConfigOrExit, stripProxyEnv, type UpstreamTransport } from "./config.js";
+import { createAllowFilter, type ProxyFilters } from "./filter.js";
 import { createStdioUpstream } from "./transports/upstream-stdio.js";
 import { createSSEUpstream } from "./transports/upstream-sse.js";
 import { createHTTPUpstream } from "./transports/upstream-http.js";
+import { buildUpstreamAuth } from "./auth";
 import { startProxy } from "./proxy.js";
 import { PROJECT_INFO } from "./util";
 
@@ -12,7 +15,11 @@ async function main(): Promise<void> {
   console.error(`Starting mcp-filter-proxy version ${PROJECT_INFO.version}...`);
 
   const config = loadConfigOrExit(process.argv);
-  const toolFilter = createToolFilter(config.allowedTools);
+  const filters: ProxyFilters = {
+    tools: createAllowFilter(config.allowedTools),
+    resources: createAllowFilter(config.allowedResources),
+    prompts: createAllowFilter(config.allowedPrompts),
+  };
 
   // For sse/http upstream with a command: spawn the server process, wait for it
   if (config.transport !== "stdio" && config.command) {
@@ -31,25 +38,40 @@ async function main(): Promise<void> {
     await waitForServer(config.url!, 15_000);
   }
 
-  // Create the appropriate upstream transport
-  let upstreamTransport;
-  switch (config.transport) {
-    case "stdio":
-      upstreamTransport = createStdioUpstream(config.command!, config.args);
-      break;
-    case "sse":
-      upstreamTransport = createSSEUpstream(config.url!);
-      break;
-    case "http":
-      upstreamTransport = createHTTPUpstream(config.url!);
-      break;
-    default:
-      throw new Error(`Invalid transport: ${config.transport as never}`);
-  }
+  const auth = await buildUpstreamAuth(config);
+  const staticAuthHeaders =
+    auth.kind === "static" ? (auth.requestInit.headers as Record<string, string>) : {};
+  const headers: Record<string, string> = { ...config.headers, ...staticAuthHeaders };
+
+  const transportOptions: {
+    authProvider?: OAuthClientProvider;
+    requestInit?: RequestInit;
+  } = {
+    ...(auth.kind === "oauth" ? { authProvider: auth.authProvider } : {}),
+    ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
+  };
+  const upstreamOptions =
+    Object.keys(transportOptions).length > 0 ? transportOptions : undefined;
+
+  const makeUpstreamTransport = (kind: UpstreamTransport): Transport => {
+    switch (kind) {
+      case "stdio":
+        return createStdioUpstream({ command: config.command!, args: config.args });
+      case "sse":
+        return createSSEUpstream({ url: config.url!, options: upstreamOptions });
+      case "http":
+        return createHTTPUpstream({ url: config.url!, options: upstreamOptions });
+      default:
+        throw new Error(`Invalid transport: ${kind as never}`);
+    }
+  };
 
   await startProxy({
-    upstreamTransport,
-    toolFilter,
+    makeUpstreamTransport,
+    transport: config.transport,
+    autoNegotiateRemote: config.autoNegotiateRemote,
+    oauth: auth.kind === "oauth" ? auth.runtime : undefined,
+    filters,
     exposeTransport: config.exposeTransport,
     exposePort: config.exposePort,
     exposeHost: config.exposeHost,
