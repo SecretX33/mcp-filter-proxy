@@ -198,6 +198,8 @@ describe("interactive upstream OAuth flow", () => {
 
   const makeConfig = (): ProxyConfig => ({
     transport: "http",
+    autoNegotiateRemote: false,
+    headers: {},
     exposeTransport: "stdio",
     allowedTools: null,
     allowedResources: null,
@@ -212,7 +214,8 @@ describe("interactive upstream OAuth flow", () => {
       token: null,
       tokenScheme: "bearer",
       callbackPort,
-      scope: null,
+      scope: "openid email profile",
+      resource: null,
       clientName: "Test Proxy",
       storeDir: storeDir,
     },
@@ -240,7 +243,7 @@ describe("interactive upstream OAuth flow", () => {
           url: `${mock.base}/mcp`,
           options: { authProvider: auth.authProvider },
         }),
-      auth.runtime,
+      { transport: "http", autoNegotiateRemote: false, oauth: auth.runtime },
     );
     return client;
   };

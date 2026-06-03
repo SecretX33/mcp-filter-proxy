@@ -2,7 +2,7 @@
 import { spawn } from "child_process";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { loadConfigOrExit, stripProxyEnv } from "./config.js";
+import { loadConfigOrExit, stripProxyEnv, type UpstreamTransport } from "./config.js";
 import { createAllowFilter, type ProxyFilters } from "./filter.js";
 import { createStdioUpstream } from "./transports/upstream-stdio.js";
 import { createSSEUpstream } from "./transports/upstream-sse.js";
@@ -40,32 +40,42 @@ async function main(): Promise<void> {
 
   // Resolve upstream auth (static bearer, interactive OAuth, or none) for sse/http upstreams.
   const auth = await buildUpstreamAuth(config);
-  const transportOptions:
-    | { authProvider?: OAuthClientProvider; requestInit?: RequestInit }
-    | undefined =
-    auth.kind === "static"
-      ? { requestInit: auth.requestInit }
-      : auth.kind === "oauth"
-        ? { authProvider: auth.authProvider }
-        : undefined;
+
+  // Headers sent to an http/sse upstream: the user-configured ones, plus a static Authorization
+  // header when a static credential is used (the credential wins on collision).
+  const staticAuthHeaders =
+    auth.kind === "static" ? (auth.requestInit.headers as Record<string, string>) : {};
+  const headers: Record<string, string> = { ...config.headers, ...staticAuthHeaders };
+
+  const transportOptions: {
+    authProvider?: OAuthClientProvider;
+    requestInit?: RequestInit;
+  } = {
+    ...(auth.kind === "oauth" ? { authProvider: auth.authProvider } : {}),
+    ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
+  };
+  const upstreamOptions =
+    Object.keys(transportOptions).length > 0 ? transportOptions : undefined;
 
   // Build the upstream transport on demand. The factory is reused to reconnect with a fresh
-  // transport after an interactive OAuth flow completes (the first one is already started).
-  const makeUpstreamTransport = (): Transport => {
-    switch (config.transport) {
+  // transport after an interactive OAuth flow completes or when probing http→sse.
+  const makeUpstreamTransport = (kind: UpstreamTransport): Transport => {
+    switch (kind) {
       case "stdio":
         return createStdioUpstream({ command: config.command!, args: config.args });
       case "sse":
-        return createSSEUpstream({ url: config.url!, options: transportOptions });
+        return createSSEUpstream({ url: config.url!, options: upstreamOptions });
       case "http":
-        return createHTTPUpstream({ url: config.url!, options: transportOptions });
+        return createHTTPUpstream({ url: config.url!, options: upstreamOptions });
       default:
-        throw new Error(`Invalid transport: ${config.transport as never}`);
+        throw new Error(`Invalid transport: ${kind as never}`);
     }
   };
 
   await startProxy({
     makeUpstreamTransport,
+    transport: config.transport,
+    autoNegotiateRemote: config.autoNegotiateRemote,
     oauth: auth.kind === "oauth" ? auth.runtime : undefined,
     filters,
     exposeTransport: config.exposeTransport,

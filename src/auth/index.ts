@@ -57,6 +57,7 @@ export async function buildUpstreamAuth(
     openBrowser,
     clientName: auth.clientName,
     scope: auth.scope,
+    resource: auth.resource,
   });
 
   return {

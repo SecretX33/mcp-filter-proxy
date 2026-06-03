@@ -2,7 +2,14 @@ import { afterEach, describe, it, expect } from "vitest";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { createProxyServer } from "../src/proxy.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import {
+  createProxyServer,
+  connectUpstream,
+  UPSTREAM_CLIENT_CAPABILITIES,
+} from "../src/proxy.js";
 import { createAllowFilter, type AllowFilter, type ProxyFilters } from "../src/filter.js";
 
 const TOOL_NAMES = ["read_file", "write_file", "delete_file"];
@@ -209,6 +216,183 @@ describe("createProxyServer — prompts", () => {
     await expect(client.getPrompt({ name: "farewell" })).rejects.toThrow(
       /Prompt not found/,
     );
+  });
+});
+
+/** A transport that starts fine but rejects the initialize request the way a Streamable HTTP server
+ * does when it only speaks the legacy SSE transport (HTTP 405), mirroring the real failure point. */
+function mismatchTransport(): Transport {
+  const t: { onclose?: () => void } & Record<string, unknown> = {
+    async start() {},
+    async send() {
+      throw new StreamableHTTPError(405, "Method Not Allowed");
+    },
+    async close() {
+      t.onclose?.();
+    },
+  };
+  return t as unknown as Transport;
+}
+
+describe("connectUpstream — transport autodetection fallback", () => {
+  it("falls back from http to sse on a transport mismatch and connects", async () => {
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    const upstreamServer = buildUpstreamServer();
+    await upstreamServer.connect(serverSide);
+    cleanups.push(async () => {
+      await upstreamServer.close();
+    });
+
+    const client = new Client({ name: "c", version: "1.0.0" });
+    let httpAttempts = 0;
+    let sseAttempts = 0;
+    const make = (kind: "stdio" | "sse" | "http"): Transport => {
+      if (kind === "http") {
+        httpAttempts++;
+        return mismatchTransport();
+      }
+      sseAttempts++;
+      return clientSide;
+    };
+
+    await connectUpstream(client, make, { transport: "http", autoNegotiateRemote: true });
+
+    expect(httpAttempts).toBe(1);
+    expect(sseAttempts).toBe(1);
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  it("does not fall back when the transport was set explicitly", async () => {
+    const client = new Client({ name: "c", version: "1.0.0" });
+    await expect(
+      connectUpstream(client, () => mismatchTransport(), {
+        transport: "http",
+        autoNegotiateRemote: false,
+      }),
+    ).rejects.toThrow(/Failed to connect to upstream/);
+  });
+});
+
+const allowAllFilters = (): ProxyFilters => ({
+  tools: createAllowFilter(null),
+  resources: createAllowFilter(null),
+  prompts: createAllowFilter(null),
+});
+
+describe("createProxyServer — client capabilities & server→client relay", () => {
+  it("declares the MCP-UI extension and core client capabilities to the upstream", async () => {
+    const upstreamServer = new McpServer({ name: "up", version: "1.0.0" });
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    const upstreamClient = new Client(
+      { name: "proxy-up", version: "1.0.0" },
+      { capabilities: UPSTREAM_CLIENT_CAPABILITIES },
+    );
+    await Promise.all([
+      upstreamServer.connect(serverSide),
+      upstreamClient.connect(clientSide),
+    ]);
+    cleanups.push(async () => {
+      await upstreamClient.close();
+      await upstreamServer.close();
+    });
+
+    const caps = upstreamServer.server.getClientCapabilities();
+    expect(caps?.extensions?.["io.modelcontextprotocol/ui"]).toBeDefined();
+    expect(caps?.roots).toBeDefined();
+    expect(caps?.sampling).toBeDefined();
+    expect(caps?.elicitation).toBeDefined();
+  });
+
+  it("relays a server-initiated roots/list request through to the downstream client", async () => {
+    // Upstream server with a tool that asks ITS client (the proxy) for the roots list.
+    const upstreamServer = new McpServer({ name: "up", version: "1.0.0" });
+    upstreamServer.registerTool("list_roots", { description: "echo roots" }, async () => {
+      const { roots } = await upstreamServer.server.listRoots();
+      return { content: [{ type: "text", text: roots.map((r) => r.uri).join(",") }] };
+    });
+
+    const [upServerSide, upClientSide] = InMemoryTransport.createLinkedPair();
+    const upstreamClient = new Client(
+      { name: "proxy-up", version: "1.0.0" },
+      { capabilities: UPSTREAM_CLIENT_CAPABILITIES },
+    );
+    await Promise.all([
+      upstreamServer.connect(upServerSide),
+      upstreamClient.connect(upClientSide),
+    ]);
+
+    const proxyServer = createProxyServer(upstreamClient, allowAllFilters());
+
+    const [proxySide, downSide] = InMemoryTransport.createLinkedPair();
+    const downstreamClient = new Client(
+      { name: "down", version: "1.0.0" },
+      { capabilities: { roots: {} } },
+    );
+    downstreamClient.setRequestHandler(ListRootsRequestSchema, async () => ({
+      roots: [{ uri: "file:///workspace", name: "workspace" }],
+    }));
+    await Promise.all([
+      proxyServer.connect(proxySide),
+      downstreamClient.connect(downSide),
+    ]);
+    cleanups.push(async () => {
+      await downstreamClient.close();
+      await proxyServer.close();
+      await upstreamClient.close();
+      await upstreamServer.close();
+    });
+
+    const result = await downstreamClient.callTool({ name: "list_roots" });
+    expect((result.content as Array<{ text: string }>)[0].text).toBe("file:///workspace");
+  });
+
+  it("subjects MCP-UI widget resources to the resource allowlist", async () => {
+    const upstreamServer = new McpServer({ name: "up", version: "1.0.0" });
+    upstreamServer.registerResource(
+      "jira-widget-openai",
+      "ui://widget/jira",
+      { mimeType: "text/html;profile=mcp-app" },
+      async (u) => ({ contents: [{ uri: u.href, text: "<html>jira</html>" }] }),
+    );
+    upstreamServer.registerResource(
+      "confluence-widget-openai",
+      "ui://widget/confluence",
+      { mimeType: "text/html;profile=mcp-app" },
+      async (u) => ({ contents: [{ uri: u.href, text: "<html>conf</html>" }] }),
+    );
+
+    const [upServerSide, upClientSide] = InMemoryTransport.createLinkedPair();
+    const upstreamClient = new Client({ name: "proxy-up", version: "1.0.0" });
+    await Promise.all([
+      upstreamServer.connect(upServerSide),
+      upstreamClient.connect(upClientSide),
+    ]);
+
+    const proxyServer = createProxyServer(upstreamClient, {
+      tools: createAllowFilter(null),
+      resources: createAllowFilter(new Set(["jira-widget-openai"])),
+      prompts: createAllowFilter(null),
+    });
+
+    const [proxySide, downSide] = InMemoryTransport.createLinkedPair();
+    const downstreamClient = new Client({ name: "down", version: "1.0.0" });
+    await Promise.all([
+      proxyServer.connect(proxySide),
+      downstreamClient.connect(downSide),
+    ]);
+    cleanups.push(async () => {
+      await downstreamClient.close();
+      await proxyServer.close();
+      await upstreamClient.close();
+      await upstreamServer.close();
+    });
+
+    const { resources } = await downstreamClient.listResources();
+    expect(resources.map((r) => r.name)).toEqual(["jira-widget-openai"]);
+    await expect(
+      downstreamClient.readResource({ uri: "ui://widget/confluence" }),
+    ).rejects.toThrow(/Resource not found/);
   });
 });
 

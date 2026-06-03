@@ -187,13 +187,134 @@ describe("parseConfig", () => {
     ).toThrow("MCP_FILTER_PROXY_AUTH_SCHEME");
   });
 
-  // --- Validation ---
+  // --- Transport autodetection (when MCP_FILTER_PROXY_UPSTREAM_TRANSPORT is unset) ---
 
-  it("throws if MCP_FILTER_PROXY_UPSTREAM_TRANSPORT is missing", () => {
-    expect(() =>
-      parseConfig({ env: {}, argv: ["node", "index.js", "node", "s.js"] }),
-    ).toThrow("MCP_FILTER_PROXY_UPSTREAM_TRANSPORT");
+  it("autodetects http (with fallback) from a server URL", () => {
+    const config = parseConfig({
+      env: { MCP_FILTER_PROXY_SERVER_URL: "http://remote:4000/mcp" },
+      argv: ["node", "index.js"],
+    });
+    expect(config.transport).toBe("http");
+    expect(config.autoNegotiateRemote).toBe(true);
   });
+
+  it("autodetects an SSE-style URL as http first too (fallback handles the rest)", () => {
+    const config = parseConfig({
+      env: { MCP_FILTER_PROXY_SERVER_URL: "http://remote:4000/sse" },
+      argv: ["node", "index.js"],
+    });
+    expect(config.transport).toBe("http");
+    expect(config.autoNegotiateRemote).toBe(true);
+  });
+
+  it("autodetects stdio from a command when no URL is given", () => {
+    const config = parseConfig({
+      env: {},
+      argv: ["node", "index.js", "npx", "some-server"],
+    });
+    expect(config.transport).toBe("stdio");
+    expect(config.autoNegotiateRemote).toBe(false);
+    expect(config.command).toBe("npx");
+  });
+
+  it("honors an explicit transport and does not enable fallback", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_SERVER_URL: "http://remote:4000/mcp",
+      },
+      argv: ["node", "index.js"],
+    });
+    expect(config.transport).toBe("http");
+    expect(config.autoNegotiateRemote).toBe(false);
+  });
+
+  it("throws a clear error when transport cannot be determined", () => {
+    expect(() => parseConfig({ env: {}, argv: ["node", "index.js"] })).toThrow(
+      /Cannot determine the upstream transport/,
+    );
+  });
+
+  // --- Default scope, custom headers, and OAuth resource ---
+
+  it("defaults the OAuth scope to openid email profile", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+      },
+      argv: ["node", "index.js"],
+    });
+    expect(config.auth.scope).toBe("openid email profile");
+  });
+
+  it("overrides the default scope when MCP_FILTER_PROXY_OAUTH_SCOPE is set", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+        MCP_FILTER_PROXY_OAUTH_SCOPE: "read:jira",
+      },
+      argv: ["node", "index.js"],
+    });
+    expect(config.auth.scope).toBe("read:jira");
+  });
+
+  it("parses the OAuth resource, defaulting to null", () => {
+    const base = {
+      MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+      MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+    };
+    expect(parseConfig({ env: base, argv: ["node", "i"] }).auth.resource).toBeNull();
+    expect(
+      parseConfig({
+        env: { ...base, MCP_FILTER_PROXY_OAUTH_RESOURCE: "https://api/v1" },
+        argv: ["node", "i"],
+      }).auth.resource,
+    ).toBe("https://api/v1");
+  });
+
+  it("parses MCP_FILTER_PROXY_HEADERS and expands ${VAR} from the env", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+        MCP_FILTER_PROXY_HEADERS: '{"X-Api-Key":"${MY_KEY}","X-Tenant":"acme"}',
+        MY_KEY: "secret-123",
+      },
+      argv: ["node", "index.js"],
+    });
+    expect(config.headers).toEqual({ "X-Api-Key": "secret-123", "X-Tenant": "acme" });
+  });
+
+  it("defaults headers to an empty object and substitutes empty for missing env vars", () => {
+    const base = {
+      MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+      MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+    };
+    expect(parseConfig({ env: base, argv: ["node", "i"] }).headers).toEqual({});
+    expect(
+      parseConfig({
+        env: { ...base, MCP_FILTER_PROXY_HEADERS: '{"X-Key":"${ABSENT}"}' },
+        argv: ["node", "i"],
+      }).headers,
+    ).toEqual({ "X-Key": "" });
+  });
+
+  it("throws if MCP_FILTER_PROXY_HEADERS is not a JSON object of strings", () => {
+    expect(() =>
+      parseConfig({
+        env: {
+          MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+          MCP_FILTER_PROXY_SERVER_URL: "http://localhost:3001/mcp",
+          MCP_FILTER_PROXY_HEADERS: '{"X-Num":5}',
+        },
+        argv: ["node", "index.js"],
+      }),
+    ).toThrow("MCP_FILTER_PROXY_HEADERS");
+  });
+
+  // --- Validation ---
 
   it("throws if MCP_FILTER_PROXY_UPSTREAM_TRANSPORT is invalid", () => {
     expect(() =>

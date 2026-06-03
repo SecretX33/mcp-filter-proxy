@@ -19,14 +19,15 @@ describe("ProxyOAuthClientProvider", () => {
   });
 
   const makeProvider = (
-    overrides: { openedUrls?: string[]; scope?: string | null } = {},
+    overrides: { openedUrls?: string[]; scope?: string; resource?: string | null } = {},
   ) =>
     new ProxyOAuthClientProvider({
       store,
       redirectUrl: "http://127.0.0.1:8909/oauth/callback",
       state: "state-xyz",
       clientName: "Test Proxy",
-      scope: overrides.scope ?? null,
+      scope: overrides.scope ?? "openid email profile",
+      resource: overrides.resource ?? null,
       openBrowser: async (url) => {
         overrides.openedUrls?.push(url);
       },
@@ -40,11 +41,27 @@ describe("ProxyOAuthClientProvider", () => {
     expect(meta.response_types).toEqual(["code"]);
     expect(meta.token_endpoint_auth_method).toBe("none");
     expect(meta.client_name).toBe("Test Proxy");
-    expect(meta.scope).toBeUndefined();
+    expect(meta.scope).toBe("openid email profile");
   });
 
-  it("includes scope in client metadata when configured", () => {
+  it("includes the configured scope in client metadata", () => {
     expect(makeProvider({ scope: "read:jira" }).clientMetadata.scope).toBe("read:jira");
+  });
+
+  it("sends the configured resource as the OAuth audience", async () => {
+    const provider = makeProvider({ resource: "https://mcp.example.com/v1/mcp" });
+    const resolved = await provider.validateResourceURL("https://mcp.example.com/v1/mcp");
+    expect(resolved?.toString()).toBe("https://mcp.example.com/v1/mcp");
+  });
+
+  it("falls back to the server-advertised resource, and omits it when neither is set", async () => {
+    const provider = makeProvider();
+    expect(
+      (
+        await provider.validateResourceURL("https://srv/mcp", "https://srv/resource")
+      )?.toString(),
+    ).toBe("https://srv/resource");
+    expect(await provider.validateResourceURL("https://srv/mcp")).toBeUndefined();
   });
 
   it("exposes redirectUrl and state", () => {

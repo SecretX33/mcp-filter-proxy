@@ -13,14 +13,17 @@ import {
   ResultSchema,
   type ClientNotification,
   type ClientRequest,
+  type ClientResult,
   type Notification,
   type ServerNotification,
+  type ServerRequest,
   type ServerResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { filterByKey, isAllowed, type ProxyFilters } from "./filter.js";
-import type { ExposeTransport } from "./config.js";
+import type { ExposeTransport, UpstreamTransport } from "./config.js";
 import type { OAuthRuntime } from "./auth/index.js";
 import { ResourceNameResolver } from "./resource-resolver.js";
 import { exposeViaStdio } from "./server/stdio.js";
@@ -29,9 +32,33 @@ import { PROJECT_INFO } from "./util";
 
 const RESOURCE_LIST_CHANGED = "notifications/resources/list_changed";
 
+/**
+ * Client capabilities the proxy advertises to the upstream on behalf of the downstream client. We
+ * declare a fixed superset rather than mirror each downstream client, because the upstream connects
+ * once at startup (and is shared across downstream clients for HTTP) so its `initialize` cannot be
+ * re-issued per client. Declaring these makes capability-gated upstream features available: the
+ * MCP-UI extension unlocks app/widget resources (e.g. Atlassian's Jira/Confluence widgets), and
+ * roots/sampling/elicitation let the upstream issue server→client requests, which the proxy relays
+ * to the real downstream client (see `createProxyServer`). If the live downstream client does not
+ * support a relayed capability, the relayed request simply errors back to the upstream.
+ */
+export const UPSTREAM_CLIENT_CAPABILITIES = {
+  roots: { listChanged: true },
+  sampling: {},
+  elicitation: {},
+  extensions: {
+    "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] },
+  },
+};
+
 export interface ProxyOptions {
-  /** Builds an upstream transport. Called again to reconnect after interactive OAuth. */
-  makeUpstreamTransport: () => Transport;
+  /** Builds an upstream transport for a given kind. Called again to reconnect after interactive
+   * OAuth completes or when probing http→sse. */
+  makeUpstreamTransport: (kind: UpstreamTransport) => Transport;
+  /** Transport to attempt first. */
+  transport: UpstreamTransport;
+  /** When true, a failed Streamable HTTP attempt for a remote upstream falls back to SSE. */
+  autoNegotiateRemote: boolean;
   filters: ProxyFilters;
   exposeTransport: ExposeTransport;
   exposePort: number;
@@ -50,11 +77,8 @@ function canFinishAuth(transport: Transport): transport is AuthCapableTransport 
 }
 
 /**
- * Build a proxy `Server` that forwards everything to the upstream client transparently, applying
- * the allowlist to tools, resources, and prompts: list responses are filtered, and `tools/call`,
- * `resources/read`, and `prompts/get` reject disallowed items. Everything else is relayed via the
- * fallback handler. Resources are filtered by name, so reads (which carry a uri) are resolved to a
- * name through `resolver`.
+ * Build a proxy `Server` that forwards everything to the upstream client transparently,
+ * applying the allowlist to tools, resources, and prompts.
  */
 export function createProxyServer(
   upstream: Client,
@@ -153,6 +177,18 @@ export function createProxyServer(
     return result as ServerResult;
   };
 
+  // The mirror of the above: relay server-initiated requests from the upstream (sampling,
+  // elicitation, roots/list, ...) to the real downstream client, so the capabilities we advertise in
+  // UPSTREAM_CLIENT_CAPABILITIES are actually serviceable.
+  upstream.fallbackRequestHandler = async (request, extra) => {
+    const result = await server.request(
+      { method: request.method, params: request.params } as ServerRequest,
+      ResultSchema,
+      { signal: extra.signal, resetTimeoutOnProgress: true },
+    );
+    return result as ClientResult;
+  };
+
   const logRelayError = (direction: string) => (err: unknown) => {
     console.error(`Failed to relay ${direction} notification:`, err);
   };
@@ -173,22 +209,43 @@ export function createProxyServer(
   return server;
 }
 
+/** A connection failure that means "wrong transport": the server speaks the other HTTP variant.
+ * Streamable HTTP servers reject the legacy SSE handshake (and vice versa) with 404/405. */
+function isTransportMismatch(err: unknown): boolean {
+  if (err instanceof StreamableHTTPError && (err.code === 404 || err.code === 405)) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /\b40[45]\b/.test(message) || /method not allowed|not found/i.test(message);
+}
+
 /**
- * Connects an MCP {@link Client} to the upstream, transparently driving an interactive OAuth flow
- * when the upstream demands it. On the first 401 with an OAuth provider attached, the transport
- * opens the browser and throws {@link UnauthorizedError}; we wait for the redirect to deliver the
- * authorization code, finish auth, and reconnect with a fresh transport carrying the new tokens.
+ * Connects an MCP {@link Client} to the upstream, transparently handling two recoverable failures,
+ * in either order and at most once each:
+ *
+ * - **Interactive OAuth.** On a 401 with an OAuth provider attached, the transport opens the browser
+ *   and throws {@link UnauthorizedError}; we wait for the redirect to deliver the authorization
+ *   code, finish auth, and reconnect with a fresh transport carrying the new tokens.
+ * - **Transport fallback.** When the transport was autodetected (`autoNegotiateRemote`) and the
+ *   Streamable HTTP attempt fails with a transport mismatch, we reconnect over SSE.
  */
 export async function connectUpstream(
   upstream: Client,
-  makeUpstreamTransport: () => Transport,
-  oauth?: OAuthRuntime,
+  makeUpstreamTransport: (kind: UpstreamTransport) => Transport,
+  {
+    transport,
+    autoNegotiateRemote,
+    oauth,
+  }: {
+    transport: UpstreamTransport;
+    autoNegotiateRemote: boolean;
+    oauth?: OAuthRuntime;
+  },
 ): Promise<Transport> {
   // Collect stderr from StdioClientTransport for diagnostics (only available when stderr: 'pipe')
   const stderrChunks: Buffer[] = [];
-  const attachStderr = (transport: Transport): void => {
-    const stderrStream =
-      (transport as { stderr?: NodeJS.ReadableStream | null }).stderr ?? null;
+  const attachStderr = (t: Transport): void => {
+    const stderrStream = (t as { stderr?: NodeJS.ReadableStream | null }).stderr ?? null;
     stderrStream?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
       process.stderr.write(chunk);
@@ -202,36 +259,62 @@ export async function connectUpstream(
     return new Error(`Failed to connect to upstream server: ${err}${upstreamStderr}`);
   };
 
-  let upstreamTransport = makeUpstreamTransport();
-  attachStderr(upstreamTransport);
+  let kind = transport;
+  let attemptedAuth = false;
+  let attemptedFallback = false;
 
   try {
-    await upstream.connect(upstreamTransport);
-  } catch (err) {
-    if (oauth && err instanceof UnauthorizedError && canFinishAuth(upstreamTransport)) {
-      console.error(
-        "Authorization required; complete the sign-in in your browser to continue...",
-      );
-      const code = await oauth.waitForCode();
-      await upstreamTransport.finishAuth(code);
-      upstreamTransport = makeUpstreamTransport();
+    while (true) {
+      const upstreamTransport = makeUpstreamTransport(kind);
       attachStderr(upstreamTransport);
       try {
         await upstream.connect(upstreamTransport);
-      } catch (retryErr) {
-        throw wrapConnectError(retryErr);
+        return upstreamTransport;
+      } catch (err) {
+        const willRetryAuth =
+          !!oauth &&
+          err instanceof UnauthorizedError &&
+          canFinishAuth(upstreamTransport) &&
+          !attemptedAuth;
+        const willFallback =
+          autoNegotiateRemote &&
+          kind === "http" &&
+          !attemptedFallback &&
+          isTransportMismatch(err);
+
+        if (!willRetryAuth && !willFallback) throw wrapConnectError(err);
+
+        // On an initialize failure the SDK's Client.connect fires `void this.close()` without
+        // awaiting it; flush that here so the next connect on this same client does not trip over a
+        // still-attached transport.
+        await upstream.close().catch(() => {});
+
+        if (willRetryAuth) {
+          attemptedAuth = true;
+          console.error(
+            "Authorization required; complete the sign-in in your browser to continue...",
+          );
+          const code = await oauth!.waitForCode();
+          await upstreamTransport.finishAuth(code);
+          continue;
+        }
+
+        attemptedFallback = true;
+        console.error(
+          "Upstream did not accept Streamable HTTP; falling back to the SSE transport...",
+        );
+        kind = "sse";
       }
-    } else {
-      throw wrapConnectError(err);
     }
   } finally {
     oauth?.close();
   }
-  return upstreamTransport;
 }
 
 export async function startProxy({
   makeUpstreamTransport,
+  transport,
+  autoNegotiateRemote,
   filters,
   exposeTransport,
   exposePort,
@@ -240,12 +323,17 @@ export async function startProxy({
 }: ProxyOptions): Promise<void> {
   console.error(`Starting MCP filter proxy with:`, { exposeTransport, exposePort });
 
-  const upstream = new Client({ name: PROJECT_INFO.name, version: PROJECT_INFO.version });
-  await connectUpstream(upstream, makeUpstreamTransport, oauth);
+  const upstream = new Client(
+    { name: PROJECT_INFO.name, version: PROJECT_INFO.version },
+    { capabilities: UPSTREAM_CLIENT_CAPABILITIES },
+  );
+  await connectUpstream(upstream, makeUpstreamTransport, {
+    transport,
+    autoNegotiateRemote,
+    oauth,
+  });
   console.error("Connected to upstream server:", upstream.getServerCapabilities());
 
-  // One resolver shared across the (possibly per-request) proxy servers, so the resource
-  // uri->name cache is not rebuilt on every HTTP request.
   const resolver = new ResourceNameResolver(upstream);
 
   let proxy: Server | undefined;
@@ -265,7 +353,9 @@ export async function startProxy({
 
   const cleanup = async () => {
     console.error("Shutting down...");
-    await upstream.close();
+    await Promise.allSettled(
+      [upstream.close(), proxy?.close()].filter((it) => it != null),
+    );
     process.exit(0);
   };
   process.on("SIGINT", cleanup);

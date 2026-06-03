@@ -18,7 +18,10 @@ export interface OAuthProviderOptions {
   state: string;
   openBrowser: OpenBrowser;
   clientName: string;
-  scope?: string | null;
+  /** OAuth scope to request as the fallback when the server advertises none. */
+  scope: string;
+  /** RFC 8707 resource/audience to bind the token to, or null to omit it. */
+  resource?: string | null;
 }
 
 /**
@@ -41,8 +44,23 @@ export class ProxyOAuthClientProvider implements OAuthClientProvider {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-      ...(this.opts.scope ? { scope: this.opts.scope } : {}),
+      scope: this.opts.scope,
     };
+  }
+
+  /**
+   * Choose the RFC 8707 `resource` to send on the authorize/token requests. A configured resource
+   * wins; otherwise we honor the one advertised by the server's Protected Resource Metadata; if
+   * neither exists we return undefined so the parameter is omitted (the SDK's default, which avoids
+   * upsetting servers that don't expect it).
+   */
+  async validateResourceURL(
+    _serverUrl: string | URL,
+    resourceFromMetadata?: string,
+  ): Promise<URL | undefined> {
+    if (this.opts.resource) return new URL(this.opts.resource);
+    if (resourceFromMetadata) return new URL(resourceFromMetadata);
+    return undefined;
   }
 
   state(): string {

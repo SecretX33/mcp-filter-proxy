@@ -19,8 +19,7 @@ const html = (message: string) =>
   `<p>You can close this window and return to your application.</p></body></html>`;
 
 /**
- * Starts a loopback HTTP server that captures the OAuth redirect. The capture promise is
- * created up front, so a redirect that arrives before `waitForCode()` is awaited is not lost.
+ * Starts a loopback HTTP server that captures the OAuth redirect.
  * The expected `state` is validated to guard against CSRF / stray requests.
  */
 export function startCallbackServer(options: {

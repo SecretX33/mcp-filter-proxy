@@ -8,6 +8,8 @@ const makeConfig = (
   tokenScheme: StaticAuthScheme = "bearer",
 ): ProxyConfig => ({
   transport: "http",
+  autoNegotiateRemote: false,
+  headers: {},
   exposeTransport: "stdio",
   allowedTools: null,
   allowedResources: null,
@@ -22,7 +24,8 @@ const makeConfig = (
     token,
     tokenScheme,
     callbackPort: 8661,
-    scope: null,
+    scope: "openid email profile",
+    resource: null,
     clientName: "Test Proxy",
     storeDir: null,
   },
