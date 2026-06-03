@@ -21,8 +21,7 @@ The upstream MCP server is reached using one of three transports. You can set
 `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect:
 
 - If `MCP_FILTER_PROXY_SERVER_URL` is set, the upstream is remote: the proxy tries **Streamable
-  HTTP** first and automatically falls back to **SSE** if the server only speaks the older
-  transport (`http-first`, the same strategy Cursor's `mcp-remote` uses).
+  HTTP** first and automatically falls back to **SSE** if the server only speaks the older  transport.
 - Otherwise, if a command is passed as positional arguments, the upstream is **stdio**.
 - If neither is provided, the proxy exits with a clear error.
 
