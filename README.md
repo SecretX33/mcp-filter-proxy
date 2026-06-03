@@ -18,15 +18,9 @@ The proxy is otherwise transparent: it advertises full client capabilities to th
 ## Connection Modes
 
 The upstream MCP server is reached using one of three transports. You can set
-`MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect:
+`MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect.
 
-- If `MCP_FILTER_PROXY_SERVER_URL` is set, the upstream is remote: the proxy tries **Streamable
-  HTTP** first and automatically falls back to **SSE** if the server only speaks the older  transport.
-- Otherwise, if a command is passed as positional arguments, the upstream is **stdio**.
-- If neither is provided, the proxy exits with a clear error.
-
-Setting `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly skips autodetection (and the http→sse
-fallback): the chosen transport is used as-is.
+Setting `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly skips autodetection (and the http→sse fallback): the chosen transport is used as-is.
 
 | Mode | When it activates                                                          | How it connects |
 | --- |----------------------------------------------------------------------------| --- |
@@ -52,7 +46,6 @@ To filter a local stdio server (the most common case), pass the wrapped command 
         "npx", "-y", "another-mcp-server"
       ],
       "env": {
-        "MCP_FILTER_PROXY_UPSTREAM_TRANSPORT": "stdio",
         "MCP_FILTER_PROXY_ALLOWED_TOOLS": "read_file,list_directory,search_files"
       }
     }
@@ -69,7 +62,6 @@ To wrap a remote server over Streamable HTTP, point at its URL instead. The prox
       "command": "npx",
       "args": ["-y", "mcp-filter-proxy"],
       "env": {
-        "MCP_FILTER_PROXY_UPSTREAM_TRANSPORT": "http",
         "MCP_FILTER_PROXY_SERVER_URL": "http://my-server:3001/mcp",
         "MCP_FILTER_PROXY_ALLOWED_TOOLS": "run_query,list_schemas"
       }
@@ -86,7 +78,6 @@ Use `claude mcp add` to register the server. The proxy config goes in `--env` fl
 
 ```bash
 claude mcp add --transport stdio filtered-filesystem \
-  --env MCP_FILTER_PROXY_UPSTREAM_TRANSPORT=stdio \
   --env MCP_FILTER_PROXY_ALLOWED_TOOLS=read_file,list_directory \
   -- npx -y mcp-filter-proxy npx -y another-mcp-server
 ```
@@ -99,10 +90,7 @@ All configuration is via environment variables.
 
 ### Required
 
-There is no single required variable, but you must give the proxy something to connect to: either a
-command to spawn (passed as positional arguments, for a stdio upstream) or
-`MCP_FILTER_PROXY_SERVER_URL` (for a remote upstream). The transport is then autodetected unless you
-set `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT`.
+There is no single required variable, but you must give the proxy something to connect to: either a command to spawn (passed as positional arguments, for a stdio upstream) or `MCP_FILTER_PROXY_SERVER_URL` (for a remote upstream). The transport is then autodetected unless you set `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT`.
 
 ### Optional
 
