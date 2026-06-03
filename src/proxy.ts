@@ -13,18 +13,32 @@ import {
   type ServerResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { filterToolList, isToolAllowed, type ToolFilter } from "./filter.js";
 import type { ExposeTransport } from "./config.js";
+import type { OAuthRuntime } from "./auth/index.js";
 import { exposeViaStdio } from "./server/stdio.js";
 import { exposeViaHttp } from "./server/http.js";
 import { PROJECT_INFO } from "./util";
 
 export interface ProxyOptions {
-  upstreamTransport: Transport;
+  /** Builds an upstream transport. Called again to reconnect after interactive OAuth. */
+  makeUpstreamTransport: () => Transport;
   toolFilter: ToolFilter;
   exposeTransport: ExposeTransport;
   exposePort: number;
   exposeHost: string;
+  /** Present when an interactive OAuth flow may be required for the upstream connection. */
+  oauth?: OAuthRuntime;
+}
+
+/** Transports that support completing an interactive OAuth flow (http/sse). */
+type AuthCapableTransport = Transport & {
+  finishAuth(authorizationCode: string): Promise<void>;
+};
+
+function canFinishAuth(transport: Transport): transport is AuthCapableTransport {
+  return typeof (transport as { finishAuth?: unknown }).finishAuth === "function";
 }
 
 /**
@@ -86,41 +100,75 @@ export function createProxyServer(upstream: Client, toolFilter: ToolFilter): Ser
   return server;
 }
 
-export async function startProxy({
-  upstreamTransport,
-  toolFilter,
-  exposeTransport,
-  exposePort,
-  exposeHost,
-}: ProxyOptions): Promise<void> {
-  console.error(`Starting MCP filter proxy with:`, {
-    transport: upstreamTransport.constructor.name,
-    exposeTransport,
-    exposePort,
-  });
-
+/**
+ * Connects an MCP {@link Client} to the upstream, transparently driving an interactive OAuth flow
+ * when the upstream demands it. On the first 401 with an OAuth provider attached, the transport
+ * opens the browser and throws {@link UnauthorizedError}; we wait for the redirect to deliver the
+ * authorization code, finish auth, and reconnect with a fresh transport carrying the new tokens.
+ */
+export async function connectUpstream(
+  upstream: Client,
+  makeUpstreamTransport: () => Transport,
+  oauth?: OAuthRuntime,
+): Promise<Transport> {
   // Collect stderr from StdioClientTransport for diagnostics (only available when stderr: 'pipe')
   const stderrChunks: Buffer[] = [];
-  const stderrStream =
-    (upstreamTransport as { stderr?: NodeJS.ReadableStream | null }).stderr ?? null;
-  if (stderrStream) {
-    stderrStream.on("data", (chunk: Buffer) => {
+  const attachStderr = (transport: Transport): void => {
+    const stderrStream =
+      (transport as { stderr?: NodeJS.ReadableStream | null }).stderr ?? null;
+    stderrStream?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
       process.stderr.write(chunk);
     });
-  }
-
-  // Connect to upstream server as a client
-  const upstream = new Client({ name: PROJECT_INFO.name, version: PROJECT_INFO.version });
-  try {
-    await upstream.connect(upstreamTransport);
-  } catch (err) {
+  };
+  const wrapConnectError = (err: unknown): Error => {
     const upstreamStderr =
       stderrChunks.length > 0
         ? `\n\n[Upstream Error] ${Buffer.concat(stderrChunks).toString().trim()}`
         : "";
-    throw new Error(`Failed to connect to upstream server: ${err}${upstreamStderr}`);
+    return new Error(`Failed to connect to upstream server: ${err}${upstreamStderr}`);
+  };
+
+  let upstreamTransport = makeUpstreamTransport();
+  attachStderr(upstreamTransport);
+
+  try {
+    await upstream.connect(upstreamTransport);
+  } catch (err) {
+    if (oauth && err instanceof UnauthorizedError && canFinishAuth(upstreamTransport)) {
+      console.error(
+        "Authorization required; complete the sign-in in your browser to continue...",
+      );
+      const code = await oauth.waitForCode();
+      await upstreamTransport.finishAuth(code);
+      upstreamTransport = makeUpstreamTransport();
+      attachStderr(upstreamTransport);
+      try {
+        await upstream.connect(upstreamTransport);
+      } catch (retryErr) {
+        throw wrapConnectError(retryErr);
+      }
+    } else {
+      throw wrapConnectError(err);
+    }
+  } finally {
+    oauth?.close();
   }
+  return upstreamTransport;
+}
+
+export async function startProxy({
+  makeUpstreamTransport,
+  toolFilter,
+  exposeTransport,
+  exposePort,
+  exposeHost,
+  oauth,
+}: ProxyOptions): Promise<void> {
+  console.error(`Starting MCP filter proxy with:`, { exposeTransport, exposePort });
+
+  const upstream = new Client({ name: PROJECT_INFO.name, version: PROJECT_INFO.version });
+  await connectUpstream(upstream, makeUpstreamTransport, oauth);
   console.error("Connected to upstream server:", upstream.getServerCapabilities());
 
   let proxy: Server | undefined;

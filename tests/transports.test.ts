@@ -8,31 +8,31 @@ import { createStdioUpstream } from "../src/transports/upstream-stdio.js";
 
 describe("createSSEUpstream", () => {
   it("creates an SSE transport from a valid url", () => {
-    expect(createSSEUpstream("http://localhost:3000/sse")).toBeInstanceOf(
+    expect(createSSEUpstream({ url: "http://localhost:3000/sse" })).toBeInstanceOf(
       SSEClientTransport,
     );
   });
 
   it("throws on a malformed url", () => {
-    expect(() => createSSEUpstream("not a url")).toThrow();
+    expect(() => createSSEUpstream({ url: "not a url" })).toThrow();
   });
 });
 
 describe("createHTTPUpstream", () => {
   it("creates a streamable HTTP transport from a valid url", () => {
-    expect(createHTTPUpstream("http://localhost:3000/mcp")).toBeInstanceOf(
+    expect(createHTTPUpstream({ url: "http://localhost:3000/mcp" })).toBeInstanceOf(
       StreamableHTTPClientTransport,
     );
   });
 
   it("throws on a malformed url", () => {
-    expect(() => createHTTPUpstream("not a url")).toThrow();
+    expect(() => createHTTPUpstream({ url: "not a url" })).toThrow();
   });
 });
 
 describe("createStdioUpstream", () => {
   it("creates a stdio transport for a valid command", () => {
-    expect(createStdioUpstream("node", ["--version"])).toBeInstanceOf(
+    expect(createStdioUpstream({ command: "node", args: ["--version"] })).toBeInstanceOf(
       StdioClientTransport,
     );
   });

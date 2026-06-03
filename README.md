@@ -104,6 +104,40 @@ All configuration is via environment variables.
 | `MCP_FILTER_PROXY_EXPOSE_PORT` | `8808` | Port for the HTTP expose server |
 | `MCP_FILTER_PROXY_EXPOSE_HOST` | `127.0.0.1` | Bind address for the HTTP expose server |
 
+### Upstream authentication (sse/http)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_FILTER_PROXY_UPSTREAM_AUTH` | `auto` | `auto` performs an interactive browser OAuth flow when the upstream replies `401`; `none` disables it |
+| `MCP_FILTER_PROXY_AUTH_TOKEN` | — | Pre-obtained bearer token sent as `Authorization: Bearer <token>`. Takes precedence over OAuth (good for CI/headless) |
+| `MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT` | `8909` | Loopback port the OAuth redirect callback listens on |
+| `MCP_FILTER_PROXY_OAUTH_SCOPE` | — | OAuth scope to request. Omit to let the server decide |
+| `MCP_FILTER_PROXY_OAUTH_CLIENT_NAME` | `MCP Filter Proxy` | `client_name` advertised during dynamic client registration |
+| `MCP_FILTER_PROXY_OAUTH_STORE_DIR` | `~/.mcp-filter-proxy/oauth` | Directory where OAuth tokens and registration are cached |
+
+## Authenticating to OAuth-protected upstreams
+
+Some remote MCP servers (for example the Atlassian MCP server) require OAuth. When the upstream replies `401`, the proxy performs the same browser-based flow as native clients: it discovers the authorization server, registers itself dynamically, opens your browser to sign in, and caches the resulting token. No configuration beyond the URL is needed, this is the default (`MCP_FILTER_PROXY_UPSTREAM_AUTH=auto`).
+
+```json5
+{
+  "mcpServers": {
+    "atlassian": {
+      "command": "npx",
+      "args": ["-y", "mcp-filter-proxy"],
+      "env": {
+        "MCP_FILTER_PROXY_UPSTREAM_TRANSPORT": "http",
+        "MCP_FILTER_PROXY_SERVER_URL": "https://mcp.atlassian.com/v1/mcp"
+      }
+    }
+  }
+}
+```
+
+The first run opens a browser for you to authorize. Tokens are cached under `~/.mcp-filter-proxy/oauth` (keyed per server URL) and refreshed automatically on later runs, so you are not prompted again. To force re-authentication, delete that directory. A non-auth upstream is unaffected: the OAuth flow only triggers on a `401`.
+
+If you already hold a token (or run headless), set `MCP_FILTER_PROXY_AUTH_TOKEN` to skip the browser entirely, or set `MCP_FILTER_PROXY_UPSTREAM_AUTH=none` to disable upstream auth.
+
 ## Finding tool names
 
 To see which tools a server exposes, ask your AI assistant to list them, or use the MCP Inspector:

@@ -1,10 +1,15 @@
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { stripProxyEnv } from "../config.js";
 
-export function createStdioUpstream(
-  command: string,
-  args: string[],
-): StdioClientTransport {
+export interface StdioUpstreamParams {
+  command: string;
+  args: string[];
+}
+
+export function createStdioUpstream({
+  command,
+  args,
+}: StdioUpstreamParams): StdioClientTransport {
   console.error(
     `Using stdio transport for upstream server: ${command} ${args.join(" ")}`,
   );

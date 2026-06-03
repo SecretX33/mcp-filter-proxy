@@ -22,6 +22,29 @@ export interface ProxyConfig {
   exposePort: number;
   /** Host/bind address for HTTP expose transport. */
   exposeHost: string;
+  /** Upstream authentication settings. */
+  auth: UpstreamAuthConfig;
+}
+
+export type UpstreamAuthMode = "auto" | "none";
+
+export interface UpstreamAuthConfig {
+  /**
+   * Strategy for the upstream connection. `auto` (default) attaches an interactive OAuth
+   * provider that only activates when the upstream replies 401; `none` disables it.
+   * A static `token` always takes precedence over both.
+   */
+  mode: UpstreamAuthMode;
+  /** Pre-obtained bearer token sent as `Authorization: Bearer <token>` to the upstream. */
+  token: string | null;
+  /** Loopback port the OAuth redirect callback server listens on. */
+  callbackPort: number;
+  /** OAuth scope to request, or null to let the server decide. */
+  scope: string | null;
+  /** `client_name` advertised during dynamic client registration. */
+  clientName: string;
+  /** Directory where OAuth tokens/registration are cached, or null for the default. */
+  storeDir: string | null;
 }
 
 const AllowedTools = z
@@ -43,6 +66,26 @@ export const EnvSchema = z.object({
   MCP_FILTER_PROXY_EXPOSE_HOST: z.string().default("127.0.0.1"),
   MCP_FILTER_PROXY_ALLOWED_TOOLS: AllowedTools,
   MCP_FILTER_PROXY_SERVER_URL: z
+    .string()
+    .optional()
+    .transform((v) => v ?? null),
+  MCP_FILTER_PROXY_UPSTREAM_AUTH: z.enum(["auto", "none"]).default("auto"),
+  MCP_FILTER_PROXY_AUTH_TOKEN: z
+    .string()
+    .optional()
+    .transform((v) => v ?? null),
+  MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(65535)
+    .default(8909),
+  MCP_FILTER_PROXY_OAUTH_SCOPE: z
+    .string()
+    .optional()
+    .transform((v) => v ?? null),
+  MCP_FILTER_PROXY_OAUTH_CLIENT_NAME: z.string().default("MCP Filter Proxy"),
+  MCP_FILTER_PROXY_OAUTH_STORE_DIR: z
     .string()
     .optional()
     .transform((v) => v ?? null),
@@ -92,6 +135,14 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
     url: parsedEnv.MCP_FILTER_PROXY_SERVER_URL,
     exposePort: parsedEnv.MCP_FILTER_PROXY_EXPOSE_PORT,
     exposeHost: parsedEnv.MCP_FILTER_PROXY_EXPOSE_HOST,
+    auth: {
+      mode: parsedEnv.MCP_FILTER_PROXY_UPSTREAM_AUTH,
+      token: parsedEnv.MCP_FILTER_PROXY_AUTH_TOKEN,
+      callbackPort: parsedEnv.MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT,
+      scope: parsedEnv.MCP_FILTER_PROXY_OAUTH_SCOPE,
+      clientName: parsedEnv.MCP_FILTER_PROXY_OAUTH_CLIENT_NAME,
+      storeDir: parsedEnv.MCP_FILTER_PROXY_OAUTH_STORE_DIR,
+    },
   };
 }
 
