@@ -38,11 +38,7 @@ async function main(): Promise<void> {
     await waitForServer(config.url!, 15_000);
   }
 
-  // Resolve upstream auth (static bearer, interactive OAuth, or none) for sse/http upstreams.
   const auth = await buildUpstreamAuth(config);
-
-  // Headers sent to an http/sse upstream: the user-configured ones, plus a static Authorization
-  // header when a static credential is used (the credential wins on collision).
   const staticAuthHeaders =
     auth.kind === "static" ? (auth.requestInit.headers as Record<string, string>) : {};
   const headers: Record<string, string> = { ...config.headers, ...staticAuthHeaders };
@@ -57,8 +53,6 @@ async function main(): Promise<void> {
   const upstreamOptions =
     Object.keys(transportOptions).length > 0 ? transportOptions : undefined;
 
-  // Build the upstream transport on demand. The factory is reused to reconnect with a fresh
-  // transport after an interactive OAuth flow completes or when probing http→sse.
   const makeUpstreamTransport = (kind: UpstreamTransport): Transport => {
     switch (kind) {
       case "stdio":

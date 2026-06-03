@@ -121,7 +121,7 @@ set `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT`.
 | `MCP_FILTER_PROXY_EXPOSE_PORT` | `8808` | Port for the HTTP expose server |
 | `MCP_FILTER_PROXY_EXPOSE_HOST` | `127.0.0.1` | Bind address for the HTTP expose server |
 
-### Upstream authentication (sse/http)
+### Upstream authentication (SSE/HTTP)
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -140,8 +140,6 @@ The proxy also supports interactive browser-based OAuth flows that some remote M
 
 The first run opens a browser for you to authorize. Tokens are cached under `~/.mcp-auth/mcp-filter-proxy-<version>/oauth` (keyed per server URL, and versioned so an upgrade starts clean) and refreshed automatically on later runs, so you are not prompted again. To force re-authentication, delete that directory.
 
-By default the proxy requests the `openid email profile` scope when the server advertises no scopes of its own. This matters for servers like Atlassian that return their resources and prompts only to a scoped token: with an empty scope, `tools` work but `resources/list` and `prompts/list` come back as "method not found". Override the scope with `MCP_FILTER_PROXY_OAUTH_SCOPE` if a server needs specific scopes. If you change the scope after a token is cached, delete the cache directory above to re-authorize.
-
 If you already hold a token (or run headless), set `MCP_FILTER_PROXY_AUTH_TOKEN` to skip the browser entirely, or set `MCP_FILTER_PROXY_UPSTREAM_AUTH=none` to disable upstream auth.
 
 ## Finding tool names
@@ -149,7 +147,7 @@ If you already hold a token (or run headless), set `MCP_FILTER_PROXY_AUTH_TOKEN`
 To see which tools a server exposes, ask your AI assistant to list them, or use the MCP Inspector:
 
 ```bash
-npx @modelcontextprotocol/inspector npx -y another-mcp-server /home/user
+npx @modelcontextprotocol/inspector npx -y another-mcp-server
 ```
 
 Open the **Tools** tab, then copy the names you want into `MCP_FILTER_PROXY_ALLOWED_TOOLS`.

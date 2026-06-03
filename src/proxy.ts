@@ -67,7 +67,6 @@ export interface ProxyOptions {
   oauth?: OAuthRuntime;
 }
 
-/** Transports that support completing an interactive OAuth flow (http/sse). */
 type AuthCapableTransport = Transport & {
   finishAuth(authorizationCode: string): Promise<void>;
 };
@@ -284,9 +283,6 @@ export async function connectUpstream(
 
         if (!willRetryAuth && !willFallback) throw wrapConnectError(err);
 
-        // On an initialize failure the SDK's Client.connect fires `void this.close()` without
-        // awaiting it; flush that here so the next connect on this same client does not trip over a
-        // still-attached transport.
         await upstream.close().catch(() => {});
 
         if (willRetryAuth) {

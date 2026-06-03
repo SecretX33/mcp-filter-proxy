@@ -7,9 +7,7 @@ interface NamedResource {
 
 /**
  * Maps resource `uri` -> `name` for the upstream server, so the proxy can enforce a name-based
- * resource allowlist on `resources/read` (which carries only a uri). The map is filled from every
- * `resources/list` the proxy relays; on a miss it does a single paginated sweep of the upstream
- * resource list and caches it. A `resources/list_changed` notification invalidates the cache.
+ * resource allowlist on `resources/read` (which carries only a uri).
  */
 export class ResourceNameResolver {
   private uriToName = new Map<string, string>();
@@ -18,7 +16,7 @@ export class ResourceNameResolver {
 
   constructor(private readonly upstream: Client) {}
 
-  /** Record uri -> name pairs observed in a relayed list response. */
+  /** Record `uri -> name` pairs observed in a relayed list response. */
   record(resources: NamedResource[]): void {
     for (const { uri, name } of resources) {
       this.uriToName.set(uri, name);
@@ -33,7 +31,7 @@ export class ResourceNameResolver {
     return this.uriToName.get(uri);
   }
 
-  /** Drop the cache so the next lookup re-syncs (e.g. after a list_changed notification). */
+  /** Drop the cache so the next lookup re-syncs (e.g. after a `list_changed` notification). */
   invalidate(): void {
     this.uriToName.clear();
     this.loaded = false;
