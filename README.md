@@ -13,9 +13,7 @@ flowchart LR
 
 The proxy sits between your AI client and an MCP server. Anything not on its allowlist is hidden: it never appears in the listing the LLM sees and any direct call to it is rejected, so the LLM is never aware it exists. The same allowlist mechanism applies to tools, resources, and prompts, each with its own env var. Leave an allowlist unset to forward that kind unfiltered.
 
-The proxy is otherwise transparent: it advertises full client capabilities to the wrapped server (including the MCP-UI extension, so servers that expose app/widget resources behind it, such as Atlassian's Jira/Confluence widgets, surface them) and relays server-initiated requests (sampling, elicitation, roots) through to your real client.
-
-The wrapped server command and its arguments are passed as positional arguments, everything after `mcp-filter-proxy` is forwarded as-is to the command you want to run. All proxy-specific environment variables are stripped before forwarding, so your proxy config never leaks into the wrapped server.
+The proxy is otherwise transparent: it advertises full client capabilities to the wrapped server and relays server-initiated requests through to your real client.
 
 ## Connection Modes
 
