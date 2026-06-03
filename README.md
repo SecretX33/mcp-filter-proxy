@@ -11,7 +11,7 @@ flowchart LR
     A[AI Client] --> B["mcp-filter-proxy<br/>(allowlist filter)"] --> C[Your MCP Server]
 ```
 
-The proxy sits between your AI client and an MCP server. Any tool not on the allowlist is hidden: it never appears in the server's tool list and calls to it are rejected, so the LLM is never aware it exists. Resources and prompts are forwarded unfiltered.
+The proxy sits between your AI client and an MCP server. Anything not on its allowlist is hidden: it never appears in the listing the LLM sees and any direct call to it is rejected, so the LLM is never aware it exists. The same allowlist mechanism applies to tools, resources, and prompts, each with its own env var. Leave an allowlist unset to forward that kind unfiltered.
 
 The wrapped server command and its arguments are passed as positional arguments, everything after `mcp-filter-proxy` is forwarded as-is to the command you want to run. All proxy-specific environment variables are stripped before forwarding, so your proxy config never leaks into the wrapped server.
 
@@ -100,6 +100,8 @@ All configuration is via environment variables.
 | --- | --- | --- |
 | `MCP_FILTER_PROXY_SERVER_URL` | — | URL of the upstream MCP server (e.g. `http://localhost:3001/mcp`). Required when the upstream transport is `sse` or `http` |
 | `MCP_FILTER_PROXY_ALLOWED_TOOLS` | *(allow all)* | Comma-separated list of allowed tool names. Omit or leave empty to allow everything |
+| `MCP_FILTER_PROXY_ALLOWED_RESOURCES` | *(allow all)* | Comma-separated list of allowed resource **names**. Disallowed resources are hidden from listings and `resources/read` of one is rejected |
+| `MCP_FILTER_PROXY_ALLOWED_PROMPTS` | *(allow all)* | Comma-separated list of allowed prompt names. Disallowed prompts are hidden from listings and `prompts/get` of one is rejected |
 | `MCP_FILTER_PROXY_EXPOSE_TRANSPORT` | `stdio` | How to expose the proxy to clients: `stdio` or `http` |
 | `MCP_FILTER_PROXY_EXPOSE_PORT` | `8808` | Port for the HTTP expose server |
 | `MCP_FILTER_PROXY_EXPOSE_HOST` | `127.0.0.1` | Bind address for the HTTP expose server |

@@ -200,6 +200,8 @@ describe("interactive upstream OAuth flow", () => {
     transport: "http",
     exposeTransport: "stdio",
     allowedTools: null,
+    allowedResources: null,
+    allowedPrompts: null,
     command: null,
     args: [],
     url: `${mock.base}/mcp`,

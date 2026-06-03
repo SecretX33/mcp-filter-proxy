@@ -10,6 +10,8 @@ const makeConfig = (
   transport: "http",
   exposeTransport: "stdio",
   allowedTools: null,
+  allowedResources: null,
+  allowedPrompts: null,
   command: null,
   args: [],
   url: "https://example.com/mcp",

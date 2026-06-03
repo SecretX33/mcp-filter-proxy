@@ -85,6 +85,28 @@ describe("parseConfig", () => {
     expect(config.allowedTools).toEqual(new Set(["read_file", "write_file"]));
   });
 
+  it("parses allowed resources and prompts as comma-separated lists", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "stdio",
+        MCP_FILTER_PROXY_ALLOWED_RESOURCES: "alpha, beta",
+        MCP_FILTER_PROXY_ALLOWED_PROMPTS: "greet",
+      },
+      argv: ["node", "index.js", "node", "server.js"],
+    });
+    expect(config.allowedResources).toEqual(new Set(["alpha", "beta"]));
+    expect(config.allowedPrompts).toEqual(new Set(["greet"]));
+  });
+
+  it("treats missing resource/prompt allowlists as allow-all (null)", () => {
+    const config = parseConfig({
+      env: { MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "stdio" },
+      argv: ["node", "index.js", "node", "server.js"],
+    });
+    expect(config.allowedResources).toBeNull();
+    expect(config.allowedPrompts).toBeNull();
+  });
+
   // --- Expose transport ---
 
   it("defaults expose transport to stdio", () => {

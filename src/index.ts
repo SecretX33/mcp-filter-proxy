@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { loadConfigOrExit, stripProxyEnv } from "./config.js";
-import { createToolFilter } from "./filter.js";
+import { createAllowFilter, type ProxyFilters } from "./filter.js";
 import { createStdioUpstream } from "./transports/upstream-stdio.js";
 import { createSSEUpstream } from "./transports/upstream-sse.js";
 import { createHTTPUpstream } from "./transports/upstream-http.js";
@@ -15,7 +15,11 @@ async function main(): Promise<void> {
   console.error(`Starting mcp-filter-proxy version ${PROJECT_INFO.version}...`);
 
   const config = loadConfigOrExit(process.argv);
-  const toolFilter = createToolFilter(config.allowedTools);
+  const filters: ProxyFilters = {
+    tools: createAllowFilter(config.allowedTools),
+    resources: createAllowFilter(config.allowedResources),
+    prompts: createAllowFilter(config.allowedPrompts),
+  };
 
   // For sse/http upstream with a command: spawn the server process, wait for it
   if (config.transport !== "stdio" && config.command) {
@@ -63,7 +67,7 @@ async function main(): Promise<void> {
   await startProxy({
     makeUpstreamTransport,
     oauth: auth.kind === "oauth" ? auth.runtime : undefined,
-    toolFilter,
+    filters,
     exposeTransport: config.exposeTransport,
     exposePort: config.exposePort,
     exposeHost: config.exposeHost,

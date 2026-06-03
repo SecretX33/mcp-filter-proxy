@@ -12,6 +12,10 @@ export interface ProxyConfig {
   exposeTransport: ExposeTransport;
   /** Allowed tool names. null = allow everything. */
   allowedTools: Set<string> | null;
+  /** Allowed resource names. null = allow everything. */
+  allowedResources: Set<string> | null;
+  /** Allowed prompt names. null = allow everything. */
+  allowedPrompts: Set<string> | null;
   /** Command to spawn the wrapped server (required for stdio, optional for sse/http). */
   command: string | null;
   /** Arguments for the spawned command. */
@@ -53,7 +57,8 @@ export interface UpstreamAuthConfig {
   storeDir: string | null;
 }
 
-const AllowedTools = z
+/** Comma-separated allowlist of names; empty/omitted becomes `null` (allow all). */
+const CommaSeparatedSet = z
   .string()
   .transform((v) => {
     const names = v
@@ -70,7 +75,9 @@ export const EnvSchema = z.object({
   MCP_FILTER_PROXY_EXPOSE_TRANSPORT: z.enum(["stdio", "http"]).default("stdio"),
   MCP_FILTER_PROXY_EXPOSE_PORT: z.coerce.number().int().min(1).max(65535).default(8808),
   MCP_FILTER_PROXY_EXPOSE_HOST: z.string().default("127.0.0.1"),
-  MCP_FILTER_PROXY_ALLOWED_TOOLS: AllowedTools,
+  MCP_FILTER_PROXY_ALLOWED_TOOLS: CommaSeparatedSet,
+  MCP_FILTER_PROXY_ALLOWED_RESOURCES: CommaSeparatedSet,
+  MCP_FILTER_PROXY_ALLOWED_PROMPTS: CommaSeparatedSet,
   MCP_FILTER_PROXY_SERVER_URL: z
     .string()
     .optional()
@@ -137,6 +144,8 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
     transport: parsedEnv.MCP_FILTER_PROXY_UPSTREAM_TRANSPORT,
     exposeTransport: parsedEnv.MCP_FILTER_PROXY_EXPOSE_TRANSPORT,
     allowedTools: parsedEnv.MCP_FILTER_PROXY_ALLOWED_TOOLS,
+    allowedResources: parsedEnv.MCP_FILTER_PROXY_ALLOWED_RESOURCES,
+    allowedPrompts: parsedEnv.MCP_FILTER_PROXY_ALLOWED_PROMPTS,
     command,
     args,
     url: parsedEnv.MCP_FILTER_PROXY_SERVER_URL,

@@ -3,8 +3,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  ReadResourceRequestSchema,
   ResultSchema,
   type ClientNotification,
   type ClientRequest,
@@ -14,17 +19,20 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { filterToolList, isToolAllowed, type ToolFilter } from "./filter.js";
+import { filterByKey, isAllowed, type ProxyFilters } from "./filter.js";
 import type { ExposeTransport } from "./config.js";
 import type { OAuthRuntime } from "./auth/index.js";
+import { ResourceNameResolver } from "./resource-resolver.js";
 import { exposeViaStdio } from "./server/stdio.js";
 import { exposeViaHttp } from "./server/http.js";
 import { PROJECT_INFO } from "./util";
 
+const RESOURCE_LIST_CHANGED = "notifications/resources/list_changed";
+
 export interface ProxyOptions {
   /** Builds an upstream transport. Called again to reconnect after interactive OAuth. */
   makeUpstreamTransport: () => Transport;
-  toolFilter: ToolFilter;
+  filters: ProxyFilters;
   exposeTransport: ExposeTransport;
   exposePort: number;
   exposeHost: string;
@@ -42,10 +50,17 @@ function canFinishAuth(transport: Transport): transport is AuthCapableTransport 
 }
 
 /**
- * Build a proxy `Server` that forwards everything to the upstream client transparently
- * (except for `tools/list` and `tools/call` that are intercepted to apply the allowlist).
+ * Build a proxy `Server` that forwards everything to the upstream client transparently, applying
+ * the allowlist to tools, resources, and prompts: list responses are filtered, and `tools/call`,
+ * `resources/read`, and `prompts/get` reject disallowed items. Everything else is relayed via the
+ * fallback handler. Resources are filtered by name, so reads (which carry a uri) are resolved to a
+ * name through `resolver`.
  */
-export function createProxyServer(upstream: Client, toolFilter: ToolFilter): Server {
+export function createProxyServer(
+  upstream: Client,
+  filters: ProxyFilters,
+  resolver: ResourceNameResolver = new ResourceNameResolver(upstream),
+): Server {
   const server = new Server(
     upstream.getServerVersion() ?? {
       name: PROJECT_INFO.name,
@@ -62,15 +77,70 @@ export function createProxyServer(upstream: Client, toolFilter: ToolFilter): Ser
   if (caps?.tools) {
     server.setRequestHandler(ListToolsRequestSchema, async (request) => {
       const result = await upstream.listTools(request.params);
-      return { ...result, tools: filterToolList(result.tools, toolFilter) };
+      return {
+        ...result,
+        tools: filterByKey(result.tools, (t) => t.name, filters.tools),
+      };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name } = request.params;
-      if (!isToolAllowed(name, toolFilter)) {
+      if (!isAllowed(name, filters.tools)) {
         throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
       }
       return await upstream.callTool(request.params, undefined, { signal: extra.signal });
+    });
+  }
+
+  if (caps?.resources) {
+    server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+      const result = await upstream.listResources(request.params);
+      resolver.record(result.resources);
+      return {
+        ...result,
+        resources: filterByKey(result.resources, (r) => r.name, filters.resources),
+      };
+    });
+
+    server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+      const result = await upstream.listResourceTemplates(request.params);
+      return {
+        ...result,
+        resourceTemplates: filterByKey(
+          result.resourceTemplates,
+          (t) => t.name,
+          filters.resources,
+        ),
+      };
+    });
+
+    server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
+      const { uri } = request.params;
+      if (!filters.resources.allowAll) {
+        const name = await resolver.nameForUri(uri);
+        if (name == undefined || !isAllowed(name, filters.resources)) {
+          throw new McpError(ErrorCode.MethodNotFound, `Resource not found: ${uri}`);
+        }
+      }
+      return await upstream.readResource(request.params, { signal: extra.signal });
+    });
+  }
+
+  if (caps?.prompts) {
+    server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+      const result = await upstream.listPrompts(request.params);
+      return {
+        ...result,
+        prompts: filterByKey(result.prompts, (p) => p.name, filters.prompts),
+      };
+    });
+
+    server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
+      const { name } = request.params;
+      if (!isAllowed(name, filters.prompts)) {
+        throw new McpError(ErrorCode.MethodNotFound, `Prompt not found: ${name}`);
+      }
+      return await upstream.getPrompt(request.params, { signal: extra.signal });
     });
   }
 
@@ -92,10 +162,13 @@ export function createProxyServer(upstream: Client, toolFilter: ToolFilter): Ser
       .notification(notification as ClientNotification)
       .catch(logRelayError("client→upstream"));
 
-  upstream.fallbackNotificationHandler = (notification: Notification) =>
-    server
+  upstream.fallbackNotificationHandler = (notification: Notification) => {
+    // The upstream resource set changed: drop the cached uri->name map so read enforcement re-syncs.
+    if (notification.method === RESOURCE_LIST_CHANGED) resolver.invalidate();
+    return server
       .notification(notification as ServerNotification)
       .catch(logRelayError("upstream→client"));
+  };
 
   return server;
 }
@@ -159,7 +232,7 @@ export async function connectUpstream(
 
 export async function startProxy({
   makeUpstreamTransport,
-  toolFilter,
+  filters,
   exposeTransport,
   exposePort,
   exposeHost,
@@ -171,16 +244,20 @@ export async function startProxy({
   await connectUpstream(upstream, makeUpstreamTransport, oauth);
   console.error("Connected to upstream server:", upstream.getServerCapabilities());
 
+  // One resolver shared across the (possibly per-request) proxy servers, so the resource
+  // uri->name cache is not rebuilt on every HTTP request.
+  const resolver = new ResourceNameResolver(upstream);
+
   let proxy: Server | undefined;
   if (exposeTransport === "stdio") {
-    proxy = createProxyServer(upstream, toolFilter);
+    proxy = createProxyServer(upstream, filters, resolver);
     await exposeViaStdio(proxy);
   } else {
     // HTTP: stateless, create a new Server per request, all sharing the same upstream Client
     await exposeViaHttp({
       port: exposePort,
       host: exposeHost,
-      createServer: () => createProxyServer(upstream, toolFilter),
+      createServer: () => createProxyServer(upstream, filters, resolver),
     });
   }
 

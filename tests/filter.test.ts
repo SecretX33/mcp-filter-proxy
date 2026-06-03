@@ -1,49 +1,51 @@
 import { describe, it, expect } from "vitest";
-import { createToolFilter, filterToolList, isToolAllowed } from "../src/filter.js";
+import { createAllowFilter, filterByKey, isAllowed } from "../src/filter.js";
 
-describe("createToolFilter", () => {
-  it("returns allow-all filter when allowedTools is null", () => {
-    const filter = createToolFilter(null);
-    expect(isToolAllowed("anything", filter)).toBe(true);
+describe("createAllowFilter / isAllowed", () => {
+  it("allows everything when the allowlist is null", () => {
+    const filter = createAllowFilter(null);
+    expect(isAllowed("anything", filter)).toBe(true);
   });
 
-  it("returns selective filter when allowedTools is a set", () => {
-    const filter = createToolFilter(new Set(["read_file", "list_dir"]));
-    expect(isToolAllowed("read_file", filter)).toBe(true);
-    expect(isToolAllowed("list_dir", filter)).toBe(true);
-    expect(isToolAllowed("delete_file", filter)).toBe(false);
+  it("allows only the listed keys when the allowlist is a set", () => {
+    const filter = createAllowFilter(new Set(["read_file", "list_dir"]));
+    expect(isAllowed("read_file", filter)).toBe(true);
+    expect(isAllowed("list_dir", filter)).toBe(true);
+    expect(isAllowed("delete_file", filter)).toBe(false);
   });
 });
 
-describe("filterToolList", () => {
-  const tools = [
-    { name: "read_file", description: "Read", inputSchema: { type: "object" as const } },
-    {
-      name: "write_file",
-      description: "Write",
-      inputSchema: { type: "object" as const },
-    },
-    {
-      name: "delete_file",
-      description: "Delete",
-      inputSchema: { type: "object" as const },
-    },
+describe("filterByKey", () => {
+  const byName = <T extends { name: string }>(t: T) => t.name;
+  const byUri = <T extends { uri: string }>(r: T) => r.uri;
+
+  const tools = [{ name: "read_file" }, { name: "write_file" }, { name: "delete_file" }];
+  const resources = [
+    { uri: "test://a", name: "a" },
+    { uri: "test://b", name: "b" },
   ];
 
-  it("returns all tools when filter allows everything", () => {
-    const filter = createToolFilter(null);
-    expect(filterToolList(tools, filter)).toHaveLength(3);
+  it("returns all items when the filter allows everything", () => {
+    expect(filterByKey(tools, byName, createAllowFilter(null))).toHaveLength(3);
   });
 
-  it("returns only allowed tools", () => {
-    const filter = createToolFilter(new Set(["read_file"]));
-    const result = filterToolList(tools, filter);
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe("read_file");
+  it("filters by a name key", () => {
+    const result = filterByKey(tools, byName, createAllowFilter(new Set(["read_file"])));
+    expect(result.map((t) => t.name)).toEqual(["read_file"]);
   });
 
-  it("returns empty array when no tools match", () => {
-    const filter = createToolFilter(new Set(["nonexistent"]));
-    expect(filterToolList(tools, filter)).toHaveLength(0);
+  it("filters by a uri key", () => {
+    const result = filterByKey(
+      resources,
+      byUri,
+      createAllowFilter(new Set(["test://b"])),
+    );
+    expect(result.map((r) => r.uri)).toEqual(["test://b"]);
+  });
+
+  it("returns an empty array when nothing matches", () => {
+    expect(filterByKey(tools, byName, createAllowFilter(new Set(["nope"])))).toHaveLength(
+      0,
+    );
   });
 });
