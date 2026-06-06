@@ -1,32 +1,40 @@
-export interface AllowFilter {
-  allowAll: boolean;
-  allowed: Set<string>;
-}
+import picomatch from "picomatch";
+import type { KindFilter } from "./config";
 
-/** Filters applied to each kind of forwarded primitive. */
+export type FilterRule =
+  | { mode: "allow-all" }
+  | { mode: "allow"; matches: (name: string) => boolean }
+  | { mode: "deny"; matches: (name: string) => boolean };
+
 export interface ProxyFilters {
-  tools: AllowFilter;
-  resources: AllowFilter;
-  prompts: AllowFilter;
+  tools: FilterRule;
+  resources: FilterRule;
+  prompts: FilterRule;
 }
 
-export function createAllowFilter(allowed: Set<string> | null): AllowFilter {
-  if (allowed === null) {
-    return { allowAll: true, allowed: new Set() };
+const compile = (patterns: string[]): ((name: string) => boolean) =>
+  picomatch(patterns, { dot: true });
+
+export function createFilterRule({ allowed, denied }: KindFilter): FilterRule {
+  if (allowed && denied) {
+    throw new Error("allow and deny patterns are mutually exclusive");
   }
-  return { allowAll: false, allowed };
+  if (allowed) return { mode: "allow", matches: compile(allowed) };
+  if (denied) return { mode: "deny", matches: compile(denied) };
+  return { mode: "allow-all" };
 }
 
-export function isAllowed(key: string, filter: AllowFilter): boolean {
-  return filter.allowAll || filter.allowed.has(key);
+export function isAllowed(name: string, rule: FilterRule): boolean {
+  if (rule.mode === "allow-all") return true;
+  return rule.mode === "allow" ? rule.matches(name) : !rule.matches(name);
 }
 
-/** Keep only the items whose key (via `keyOf`) is allowed by the filter. */
+/** Keep only the items whose key (via `keyOf`) is allowed by the rule. */
 export function filterByKey<T>(
   items: T[],
   keyOf: (item: T) => string,
-  filter: AllowFilter,
+  rule: FilterRule,
 ): T[] {
-  if (filter.allowAll) return items;
-  return items.filter((item) => filter.allowed.has(keyOf(item)));
+  if (rule.mode === "allow-all") return items;
+  return items.filter((item) => isAllowed(keyOf(item), rule));
 }

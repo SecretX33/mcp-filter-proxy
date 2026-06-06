@@ -10,7 +10,7 @@ import {
   connectUpstream,
   UPSTREAM_CLIENT_CAPABILITIES,
 } from "../src/proxy.js";
-import { createAllowFilter, type AllowFilter, type ProxyFilters } from "../src/filter.js";
+import { createFilterRule, type FilterRule, type ProxyFilters } from "../src/filter.js";
 
 const TOOL_NAMES = ["read_file", "write_file", "delete_file"];
 const RESOURCES = [
@@ -84,9 +84,9 @@ async function setupProxy(
   ]);
 
   const full: ProxyFilters = {
-    tools: filters.tools ?? createAllowFilter(null),
-    resources: filters.resources ?? createAllowFilter(null),
-    prompts: filters.prompts ?? createAllowFilter(null),
+    tools: filters.tools ?? createFilterRule(null, null),
+    resources: filters.resources ?? createFilterRule(null, null),
+    prompts: filters.prompts ?? createFilterRule(null, null),
   };
   const proxyServer = createProxyServer(upstreamClient, full);
 
@@ -110,7 +110,7 @@ async function setupProxy(
   return downstreamClient;
 }
 
-const allow = (...names: string[]): AllowFilter => createAllowFilter(new Set(names));
+const allow = (...names: string[]): FilterRule => createFilterRule(names, null);
 
 describe("createProxyServer — tools", () => {
   it("lists only the allowed tools with a selective filter", async () => {
@@ -275,9 +275,9 @@ describe("connectUpstream — transport autodetection fallback", () => {
 });
 
 const allowAllFilters = (): ProxyFilters => ({
-  tools: createAllowFilter(null),
-  resources: createAllowFilter(null),
-  prompts: createAllowFilter(null),
+  tools: createFilterRule(null, null),
+  resources: createFilterRule(null, null),
+  prompts: createFilterRule(null, null),
 });
 
 describe("createProxyServer — client capabilities & server→client relay", () => {
@@ -370,9 +370,9 @@ describe("createProxyServer — client capabilities & server→client relay", ()
     ]);
 
     const proxyServer = createProxyServer(upstreamClient, {
-      tools: createAllowFilter(null),
-      resources: createAllowFilter(new Set(["jira-widget-openai"])),
-      prompts: createAllowFilter(null),
+      tools: createFilterRule(null, null),
+      resources: createFilterRule(["jira-widget-openai"], null),
+      prompts: createFilterRule(null, null),
     });
 
     const [proxySide, downSide] = InMemoryTransport.createLinkedPair();

@@ -2,6 +2,9 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   CallToolRequestSchema,
+  type ClientNotification,
+  type ClientRequest,
+  type ClientResult,
   ErrorCode,
   GetPromptRequestSchema,
   ListPromptsRequestSchema,
@@ -9,12 +12,9 @@ import {
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  type Notification,
   ReadResourceRequestSchema,
   ResultSchema,
-  type ClientNotification,
-  type ClientRequest,
-  type ClientResult,
-  type Notification,
   type ServerNotification,
   type ServerRequest,
   type ServerResult,
@@ -139,7 +139,7 @@ export function createProxyServer(
 
     server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
       const { uri } = request.params;
-      if (!filters.resources.allowAll) {
+      if (filters.resources.mode !== "allow-all") {
         const name = await resolver.nameForUri(uri);
         if (name == undefined || !isAllowed(name, filters.resources)) {
           throw new McpError(ErrorCode.MethodNotFound, `Resource not found: ${uri}`);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseUrlStrict } from "./util";
 
 const ENV_PREFIX = "MCP_FILTER_PROXY_";
 
@@ -17,12 +18,8 @@ export interface ProxyConfig {
   headers: Record<string, string>;
   /** How to expose the proxy to downstream clients. */
   exposeTransport: ExposeTransport;
-  /** Allowed tool names. null = allow everything. */
-  allowedTools: Set<string> | null;
-  /** Allowed resource names. null = allow everything. */
-  allowedResources: Set<string> | null;
-  /** Allowed prompt names. null = allow everything. */
-  allowedPrompts: Set<string> | null;
+  /** Per-kind allow/deny name-glob filters for tools, resources, and prompts. */
+  filters: ProxyFilterConfig;
   /** Command to spawn the wrapped server (required for stdio, optional for sse/http). */
   command: string | null;
   /** Arguments for the spawned command. */
@@ -35,6 +32,19 @@ export interface ProxyConfig {
   exposeHost: string;
   /** Upstream authentication settings. */
   auth: UpstreamAuthConfig;
+}
+
+export interface ProxyFilterConfig {
+  tools: KindFilter;
+  resources: KindFilter;
+  prompts: KindFilter;
+}
+
+/** Allow/deny name globs for one kind. `allowed` and `denied` are mutually exclusive; at most one is
+ * non-null. A glob with no wildcards matches a name literally. */
+export interface KindFilter {
+  allowed: string[] | null; // `null` = no allowlist
+  denied: string[] | null; // `null` = no denylist
 }
 
 export type UpstreamAuthMode = "auto" | "none";
@@ -67,8 +77,10 @@ export interface UpstreamAuthConfig {
   storeDir: string | null;
 }
 
-/** A JSON object of header name→value; empty/omitted becomes `{}`. Values may contain `${VAR}`
- * placeholders, expanded later against the process env in {@link parseConfig}. */
+/**
+ * A JSON object of header name→value; empty/omitted becomes `{}`. Values may contain `${VAR}`
+ * placeholders.
+ */
 const HeaderMap = z
   .string()
   .optional()
@@ -79,14 +91,14 @@ const HeaderMap = z
       parsed = JSON.parse(v);
     } catch {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `${ENV_PREFIX}HEADERS must be a JSON object of string values`,
       });
       return z.NEVER;
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `${ENV_PREFIX}HEADERS must be a JSON object of string values`,
       });
       return z.NEVER;
@@ -95,7 +107,7 @@ const HeaderMap = z
     for (const [key, value] of Object.entries(parsed)) {
       if (typeof value !== "string") {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: `${ENV_PREFIX}HEADERS value for "${key}" must be a string`,
         });
         return z.NEVER;
@@ -105,55 +117,70 @@ const HeaderMap = z
     return out;
   });
 
-/** Comma-separated allowlist of names; empty/omitted becomes `null` (allow all). */
-const CommaSeparatedSet = z
+const CommaSeparatedList = z
   .string()
   .transform((v) => {
     const names = v
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    return names.length > 0 ? new Set(names) : null;
+    return names.length > 0 ? names : null;
   })
   .optional()
   .transform((v) => v ?? null);
 
-export const EnvSchema = z.object({
-  MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: z.enum(["stdio", "sse", "http"]).optional(),
-  MCP_FILTER_PROXY_EXPOSE_TRANSPORT: z.enum(["stdio", "http"]).default("stdio"),
-  MCP_FILTER_PROXY_EXPOSE_PORT: z.coerce.number().int().min(1).max(65535).default(8808),
-  MCP_FILTER_PROXY_EXPOSE_HOST: z.string().default("127.0.0.1"),
-  MCP_FILTER_PROXY_ALLOWED_TOOLS: CommaSeparatedSet,
-  MCP_FILTER_PROXY_ALLOWED_RESOURCES: CommaSeparatedSet,
-  MCP_FILTER_PROXY_ALLOWED_PROMPTS: CommaSeparatedSet,
-  MCP_FILTER_PROXY_SERVER_URL: z
-    .string()
-    .optional()
-    .transform((v) => v ?? null),
-  MCP_FILTER_PROXY_UPSTREAM_AUTH: z.enum(["auto", "none"]).default("auto"),
-  MCP_FILTER_PROXY_AUTH_TOKEN: z
-    .string()
-    .optional()
-    .transform((v) => v ?? null),
-  MCP_FILTER_PROXY_AUTH_SCHEME: z.enum(["bearer", "basic"]).default("bearer"),
-  MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(65535)
-    .default(8661),
-  MCP_FILTER_PROXY_OAUTH_SCOPE: z.string().default("openid email profile"),
-  MCP_FILTER_PROXY_OAUTH_RESOURCE: z
-    .string()
-    .optional()
-    .transform((v) => v ?? null),
-  MCP_FILTER_PROXY_OAUTH_CLIENT_NAME: z.string().default("MCP Filter Proxy"),
-  MCP_FILTER_PROXY_OAUTH_STORE_DIR: z
-    .string()
-    .optional()
-    .transform((v) => v ?? null),
-  MCP_FILTER_PROXY_HEADERS: HeaderMap,
-});
+export const EnvSchema = z
+  .object({
+    MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: z.enum(["stdio", "sse", "http"]).optional(),
+    MCP_FILTER_PROXY_EXPOSE_TRANSPORT: z.enum(["stdio", "http"]).default("stdio"),
+    MCP_FILTER_PROXY_EXPOSE_PORT: z.coerce.number().int().min(1).max(65535).default(8808),
+    MCP_FILTER_PROXY_EXPOSE_HOST: z.string().default("127.0.0.1"),
+    MCP_FILTER_PROXY_ALLOWED_TOOLS: CommaSeparatedList,
+    MCP_FILTER_PROXY_ALLOWED_RESOURCES: CommaSeparatedList,
+    MCP_FILTER_PROXY_ALLOWED_PROMPTS: CommaSeparatedList,
+    MCP_FILTER_PROXY_DENIED_TOOLS: CommaSeparatedList,
+    MCP_FILTER_PROXY_DENIED_RESOURCES: CommaSeparatedList,
+    MCP_FILTER_PROXY_DENIED_PROMPTS: CommaSeparatedList,
+    MCP_FILTER_PROXY_UPSTREAM_AUTH: z.enum(["auto", "none"]).default("auto"),
+    MCP_FILTER_PROXY_AUTH_TOKEN: z
+      .string()
+      .optional()
+      .transform((v) => v ?? null),
+    MCP_FILTER_PROXY_AUTH_SCHEME: z.enum(["bearer", "basic"]).default("bearer"),
+    MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(65535)
+      .default(8661),
+    MCP_FILTER_PROXY_OAUTH_SCOPE: z.string().default("openid email profile"),
+    MCP_FILTER_PROXY_OAUTH_RESOURCE: z
+      .string()
+      .optional()
+      .transform((v) => v ?? null),
+    MCP_FILTER_PROXY_OAUTH_CLIENT_NAME: z.string().default("MCP Filter Proxy"),
+    MCP_FILTER_PROXY_OAUTH_STORE_DIR: z
+      .string()
+      .optional()
+      .transform((v) => v ?? null),
+    MCP_FILTER_PROXY_HEADERS: HeaderMap,
+  })
+  .superRefine((env, ctx) => {
+    const pairs = [
+      ["MCP_FILTER_PROXY_ALLOWED_TOOLS", "MCP_FILTER_PROXY_DENIED_TOOLS"],
+      ["MCP_FILTER_PROXY_ALLOWED_RESOURCES", "MCP_FILTER_PROXY_DENIED_RESOURCES"],
+      ["MCP_FILTER_PROXY_ALLOWED_PROMPTS", "MCP_FILTER_PROXY_DENIED_PROMPTS"],
+    ] as const;
+    for (const [allow, deny] of pairs) {
+      if (env[allow] && env[deny]) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Set either ${allow} or ${deny}, not both`,
+          path: [deny],
+        });
+      }
+    }
+  });
 
 export interface ParseConfigInput {
   env: Record<string, string | undefined>;
@@ -193,6 +220,21 @@ function expandHeaders(
 }
 
 /**
+ * Treat the first positional arg as the upstream URL when it carries a `scheme://` prefix, returning
+ * the sanitized URL. A bare command (`npx`, `node`) returns null and is spawned over stdio instead.
+ * A URL-shaped arg with a bad or unsupported scheme throws via {@link parseUrlStrict}.
+ */
+function detectUpstreamUrl(arg: string | undefined): string | null {
+  if (!arg || !looksLikeUrl(arg)) return null;
+  return parseUrlStrict(arg);
+}
+
+/**
+ * Returns `true` when the `value` carries a `scheme://` prefix.
+ */
+const looksLikeUrl = (value: string): boolean => /^[a-zA-Z][\w+.-]*:\/\//.test(value);
+
+/**
  * Decide which upstream transport to use. An explicit value wins and is used as-is. Otherwise it is
  * inferred: a server URL means a remote upstream (try Streamable HTTP first, fall back to SSE), a
  * spawn command means stdio, and neither is an error.
@@ -211,7 +253,7 @@ function resolveUpstreamTransport({
   if (hasCommand) return { transport: "stdio", autoNegotiateRemote: false };
   throw new Error(
     `Cannot determine the upstream transport. Set ${ENV_PREFIX}UPSTREAM_TRANSPORT explicitly, ` +
-      `or provide ${ENV_PREFIX}SERVER_URL (for an http/sse server), ` +
+      `pass an http(s) URL as the first positional argument (for an http/sse server), ` +
       `or pass a command to spawn as positional arguments (for a stdio server).`,
   );
 }
@@ -220,9 +262,9 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
   const parsedEnv = EnvSchema.parse(emptyToUndefined(env));
 
   const positional = argv.slice(2);
-  const command = positional.length > 0 ? positional[0] : null;
-  const args = positional.slice(1);
-  const url = parsedEnv.MCP_FILTER_PROXY_SERVER_URL;
+  const url = detectUpstreamUrl(positional[0]);
+  const command = (url ? positional[1] : positional[0]) ?? null;
+  const args = url ? positional.slice(2) : positional.slice(1);
 
   const { transport, autoNegotiateRemote } = resolveUpstreamTransport({
     explicit: parsedEnv.MCP_FILTER_PROXY_UPSTREAM_TRANSPORT,
@@ -230,6 +272,11 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
     hasCommand: command != null,
   });
 
+  if (transport === "stdio" && url) {
+    throw new Error(
+      "stdio transport does not take a URL; pass the command to spawn as positional arguments",
+    );
+  }
   if (transport === "stdio" && !command) {
     throw new Error(
       "stdio transport requires a command to spawn the wrapped server " +
@@ -237,7 +284,9 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
     );
   }
   if (transport !== "stdio" && !url) {
-    throw new Error(`${ENV_PREFIX}SERVER_URL is required for ${transport} transport`);
+    throw new Error(
+      `${transport} transport requires the upstream server URL as the first positional argument`,
+    );
   }
 
   return {
@@ -245,12 +294,23 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
     autoNegotiateRemote,
     headers: expandHeaders(parsedEnv.MCP_FILTER_PROXY_HEADERS, env),
     exposeTransport: parsedEnv.MCP_FILTER_PROXY_EXPOSE_TRANSPORT,
-    allowedTools: parsedEnv.MCP_FILTER_PROXY_ALLOWED_TOOLS,
-    allowedResources: parsedEnv.MCP_FILTER_PROXY_ALLOWED_RESOURCES,
-    allowedPrompts: parsedEnv.MCP_FILTER_PROXY_ALLOWED_PROMPTS,
+    filters: {
+      tools: {
+        allowed: parsedEnv.MCP_FILTER_PROXY_ALLOWED_TOOLS,
+        denied: parsedEnv.MCP_FILTER_PROXY_DENIED_TOOLS,
+      },
+      resources: {
+        allowed: parsedEnv.MCP_FILTER_PROXY_ALLOWED_RESOURCES,
+        denied: parsedEnv.MCP_FILTER_PROXY_DENIED_RESOURCES,
+      },
+      prompts: {
+        allowed: parsedEnv.MCP_FILTER_PROXY_ALLOWED_PROMPTS,
+        denied: parsedEnv.MCP_FILTER_PROXY_DENIED_PROMPTS,
+      },
+    },
     command,
     args,
-    url: parsedEnv.MCP_FILTER_PROXY_SERVER_URL,
+    url,
     exposePort: parsedEnv.MCP_FILTER_PROXY_EXPOSE_PORT,
     exposeHost: parsedEnv.MCP_FILTER_PROXY_EXPOSE_HOST,
     auth: {
