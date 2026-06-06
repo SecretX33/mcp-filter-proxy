@@ -264,6 +264,34 @@ describe("connectUpstream — transport autodetection fallback", () => {
     await client.close();
   });
 
+  it("falls back from sse to http on a transport mismatch and connects", async () => {
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    const upstreamServer = buildUpstreamServer();
+    await upstreamServer.connect(serverSide);
+    cleanups.push(async () => {
+      await upstreamServer.close();
+    });
+
+    const client = new Client({ name: "c", version: "1.0.0" });
+    let httpAttempts = 0;
+    let sseAttempts = 0;
+    const make = (kind: "stdio" | "sse" | "http"): Transport => {
+      if (kind === "sse") {
+        sseAttempts++;
+        return mismatchTransport();
+      }
+      httpAttempts++;
+      return clientSide;
+    };
+
+    await connectUpstream(client, make, { transport: "sse", autoNegotiateRemote: true });
+
+    expect(sseAttempts).toBe(1);
+    expect(httpAttempts).toBe(1);
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+    await client.close();
+  });
+
   it("does not fall back when the transport was set explicitly", async () => {
     const client = new Client({ name: "c", version: "1.0.0" });
     await expect(

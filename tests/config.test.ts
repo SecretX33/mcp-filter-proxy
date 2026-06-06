@@ -256,10 +256,28 @@ describe("parseConfig", () => {
     expect(config.autoNegotiateRemote).toBe(true);
   });
 
-  it("autodetects an SSE-style URL as http first too (fallback handles the rest)", () => {
+  it("autodetects an SSE-style URL as sse first", () => {
     const config = parseConfig({
       env: {},
       argv: ["node", "index.js", "http://remote:4000/sse"],
+    });
+    expect(config.transport).toBe("sse");
+    expect(config.autoNegotiateRemote).toBe(true);
+  });
+
+  it("autodetects sse first when /sse is a non-final path segment", () => {
+    const config = parseConfig({
+      env: {},
+      argv: ["node", "index.js", "http://remote:4000/mcp/sse"],
+    });
+    expect(config.transport).toBe("sse");
+    expect(config.autoNegotiateRemote).toBe(true);
+  });
+
+  it("matches /sse on the path only, not the host", () => {
+    const config = parseConfig({
+      env: {},
+      argv: ["node", "index.js", "http://sse.example.com/mcp"],
     });
     expect(config.transport).toBe("http");
     expect(config.autoNegotiateRemote).toBe(true);

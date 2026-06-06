@@ -18,15 +18,15 @@ The proxy is otherwise transparent: it advertises full client capabilities to th
 ## Connection Modes
 
 The upstream MCP server is reached using one of three transports. You can set
-`MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect.
+`MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect. 
 
-Setting `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly skips autodetection (and the http→sse fallback): the chosen transport is used as-is.
+Setting `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly skips autodetection (and the Streamable HTTP↔SSE fallback): the chosen transport is used as-is.
 
 | Mode | When it activates                                                          | How it connects |
 | --- |----------------------------------------------------------------------------| --- |
 | **stdio** | `stdio`, or a command (not a URL) as the first positional argument | Spawns the wrapped command as a child process and talks over stdio |
-| **SSE** | `sse` + an http(s) URL as the first positional argument | Connects over Server-Sent Events (for older servers not yet on Streamable HTTP) |
-| **HTTP** | `http`, or autodetected when the first positional argument is an http(s) URL | Connects over Streamable HTTP (falling back to SSE when autodetected) |
+| **SSE** | `sse`, or autodetected when the URL path ends in `/sse` | Connects over Server-Sent Events (for older servers not yet on Streamable HTTP) |
+| **HTTP** | `http`, or autodetected when the first positional argument is an http(s) URL without an `/sse` path | Connects over Streamable HTTP |
 
 ## Using with AI Tools
 
@@ -95,7 +95,7 @@ There is no single required variable, but you must give the proxy something to c
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` | *(auto)* | Upstream transport: `stdio`, `sse`, or `http`. Leave unset to autodetect (`http`-first with SSE fallback when the first positional argument is a URL, else `stdio`). Set it to force a specific transport with no fallback |
+| `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` | *(auto)* | Upstream transport: `stdio`, `sse`, or `http`. Leave unset to autodetect: a URL argument connects over Streamable HTTP, or SSE when its path ends in `/sse`, with fallback to the other variant; otherwise `stdio`. Set it to force a specific transport with no fallback |
 | `MCP_FILTER_PROXY_HEADERS` | `{}` | Extra headers to send to an http/sse upstream, as a JSON object (e.g. `{"X-Api-Key":"${MY_KEY}"}`). Values may reference env vars via `${VAR}`, expanded at startup |
 | `MCP_FILTER_PROXY_ALLOWED_TOOLS` | *(all)* | Comma-separated list of tool-name [globs](#filtering-with-globs) to expose. Omit to allow everything |
 | `MCP_FILTER_PROXY_DENIED_TOOLS` | *(none)* | Comma-separated list of tool-name globs to hide. Everything else is exposed |

@@ -8,11 +8,11 @@ export type ExposeTransport = "stdio" | "http";
 
 export interface ProxyConfig {
   /** How to connect to the upstream (wrapped) server. For a remote upstream this is the first
-   * transport attempted; when {@link autoNegotiateRemote} is set, a failed Streamable HTTP attempt
-   * falls back to SSE. */
+   * transport attempted; when {@link autoNegotiateRemote} is set, a failed attempt falls back to
+   * the other HTTP variant. */
   transport: UpstreamTransport;
-  /** True when the transport was autodetected for a remote upstream, enabling the http→sse probe.
-   * False when the transport was set explicitly (that choice is used as-is, no fallback). */
+  /** True when the transport was autodetected for a remote upstream, enabling the Streamable
+   * HTTP↔SSE fallback probe. False when set explicitly (that choice is used as-is, no fallback). */
   autoNegotiateRemote: boolean;
   /** Extra headers to send to an http/sse upstream, with `${VAR}` already expanded from the env. */
   headers: Record<string, string>;
@@ -234,10 +234,18 @@ function detectUpstreamUrl(arg: string | undefined): string | null {
  */
 const looksLikeUrl = (value: string): boolean => /^[a-zA-Z][\w+.-]*:\/\//.test(value);
 
+/** True when the URL path has an `sse` segment (`.../sse`, `.../sse/...`), the conventional
+ * Server-Sent Events endpoint; host and query are ignored. `url` is already sanitized, so `new
+ * URL` is safe. */
+function urlHasSseSegment(url: string): boolean {
+  return new URL(url).pathname.split("/").includes("sse");
+}
+
 /**
  * Decide which upstream transport to use. An explicit value wins and is used as-is. Otherwise it is
- * inferred: a server URL means a remote upstream (try Streamable HTTP first, fall back to SSE), a
- * spawn command means stdio, and neither is an error.
+ * inferred: a server URL means a remote upstream (Streamable HTTP first, or SSE first when the path
+ * has an `sse` segment, with fallback to the other variant), a spawn command means stdio, and
+ * neither is an error.
  */
 function resolveUpstreamTransport({
   explicit,
@@ -249,7 +257,10 @@ function resolveUpstreamTransport({
   hasCommand: boolean;
 }): { transport: UpstreamTransport; autoNegotiateRemote: boolean } {
   if (explicit) return { transport: explicit, autoNegotiateRemote: false };
-  if (url) return { transport: "http", autoNegotiateRemote: true };
+  if (url) {
+    const transport = urlHasSseSegment(url) ? "sse" : "http";
+    return { transport, autoNegotiateRemote: true };
+  }
   if (hasCommand) return { transport: "stdio", autoNegotiateRemote: false };
   throw new Error(
     `Cannot determine the upstream transport. Set ${ENV_PREFIX}UPSTREAM_TRANSPORT explicitly, ` +

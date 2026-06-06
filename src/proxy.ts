@@ -53,11 +53,12 @@ export const UPSTREAM_CLIENT_CAPABILITIES = {
 
 export interface ProxyOptions {
   /** Builds an upstream transport for a given kind. Called again to reconnect after interactive
-   * OAuth completes or when probing http→sse. */
+   * OAuth completes or when probing the other HTTP variant. */
   makeUpstreamTransport: (kind: UpstreamTransport) => Transport;
   /** Transport to attempt first. */
   transport: UpstreamTransport;
-  /** When true, a failed Streamable HTTP attempt for a remote upstream falls back to SSE. */
+  /** When true, a failed first attempt for a remote upstream falls back to the other HTTP variant
+   * (Streamable HTTP↔SSE). */
   autoNegotiateRemote: boolean;
   filters: ProxyFilters;
   exposeTransport: ExposeTransport;
@@ -226,7 +227,8 @@ function isTransportMismatch(err: unknown): boolean {
  *   and throws {@link UnauthorizedError}; we wait for the redirect to deliver the authorization
  *   code, finish auth, and reconnect with a fresh transport carrying the new tokens.
  * - **Transport fallback.** When the transport was autodetected (`autoNegotiateRemote`) and the
- *   Streamable HTTP attempt fails with a transport mismatch, we reconnect over SSE.
+ *   first attempt fails with a transport mismatch, we reconnect over the other HTTP variant
+ *   (Streamable HTTP↔SSE).
  */
 export async function connectUpstream(
   upstream: Client,
@@ -277,7 +279,7 @@ export async function connectUpstream(
           !attemptedAuth;
         const willFallback =
           autoNegotiateRemote &&
-          kind === "http" &&
+          (kind === "http" || kind === "sse") &&
           !attemptedFallback &&
           isTransportMismatch(err);
 
@@ -296,10 +298,13 @@ export async function connectUpstream(
         }
 
         attemptedFallback = true;
+        const nextKind: UpstreamTransport = kind === "http" ? "sse" : "http";
+        const label = (k: UpstreamTransport) =>
+          k === "http" ? "Streamable HTTP" : "SSE";
         console.error(
-          "Upstream did not accept Streamable HTTP; falling back to the SSE transport...",
+          `Upstream did not accept the ${label(kind)} transport; falling back to ${label(nextKind)}...`,
         );
-        kind = "sse";
+        kind = nextKind;
       }
     }
   } finally {
