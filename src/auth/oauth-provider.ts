@@ -22,6 +22,9 @@ export interface OAuthProviderOptions {
   scope: string;
   /** RFC 8707 resource/audience to bind the token to, or null to omit it. */
   resource?: string | null;
+  /** Invoked just before the browser is opened, to bind the loopback callback server lazily when an
+   * interactive sign-in is actually starting. */
+  onBeforeRedirect?: () => Promise<void>;
 }
 
 /**
@@ -84,6 +87,7 @@ export class ProxyOAuthClientProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    await this.opts.onBeforeRedirect?.();
     await this.opts.openBrowser(authorizationUrl.toString());
   }
 

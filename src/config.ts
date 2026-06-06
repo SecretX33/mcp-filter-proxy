@@ -66,6 +66,9 @@ export interface UpstreamAuthConfig {
   tokenScheme: StaticAuthScheme;
   /** Loopback port the OAuth redirect callback server listens on. */
   callbackPort: number;
+  /** True when `callbackPort` was set explicitly. When false, the callback server scans past a
+   * busy port to the next free one, so parallel instances don't collide on the default. */
+  callbackPortExplicit: boolean;
   /** OAuth scope to request. Server-advertised scopes take precedence; this is the fallback. */
   scope: string;
   /** RFC 8707 resource/audience to bind the token to, or null to omit (unless the server's
@@ -270,7 +273,8 @@ function resolveUpstreamTransport({
 }
 
 export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
-  const parsedEnv = EnvSchema.parse(emptyToUndefined(env));
+  const cleanedEnv = emptyToUndefined(env);
+  const parsedEnv = EnvSchema.parse(cleanedEnv);
 
   const positional = argv.slice(2);
   const url = detectUpstreamUrl(positional[0]);
@@ -329,6 +333,7 @@ export function parseConfig({ env, argv }: ParseConfigInput): ProxyConfig {
       token: parsedEnv.MCP_FILTER_PROXY_AUTH_TOKEN,
       tokenScheme: parsedEnv.MCP_FILTER_PROXY_AUTH_SCHEME,
       callbackPort: parsedEnv.MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT,
+      callbackPortExplicit: cleanedEnv.MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT !== undefined,
       scope: parsedEnv.MCP_FILTER_PROXY_OAUTH_SCOPE,
       resource: parsedEnv.MCP_FILTER_PROXY_OAUTH_RESOURCE,
       clientName: parsedEnv.MCP_FILTER_PROXY_OAUTH_CLIENT_NAME,

@@ -79,6 +79,26 @@ describe("ProxyOAuthClientProvider", () => {
     expect(openedUrls).toEqual(["https://auth.example.com/authorize?x=1"]);
   });
 
+  it("runs onBeforeRedirect before opening the browser", async () => {
+    const events: string[] = [];
+    const provider = new ProxyOAuthClientProvider({
+      store,
+      redirectUrl: "http://127.0.0.1:8909/oauth/callback",
+      state: "s",
+      clientName: "Test Proxy",
+      scope: "openid email profile",
+      resource: null,
+      onBeforeRedirect: async () => {
+        events.push("before");
+      },
+      openBrowser: async () => {
+        events.push("open");
+      },
+    });
+    await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
+    expect(events).toEqual(["before", "open"]);
+  });
+
   it("persists tokens and client information through the store", async () => {
     const provider = makeProvider();
     await provider.saveTokens({ access_token: "tok", token_type: "Bearer" });

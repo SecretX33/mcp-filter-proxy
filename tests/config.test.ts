@@ -218,6 +218,19 @@ describe("parseConfig", () => {
     expect(config.auth.token).toBeNull();
     expect(config.auth.tokenScheme).toBe("bearer");
     expect(config.auth.callbackPort).toBe(8661);
+    expect(config.auth.callbackPortExplicit).toBe(false);
+  });
+
+  it("marks the callback port explicit when MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT is set", () => {
+    const config = parseConfig({
+      env: {
+        MCP_FILTER_PROXY_UPSTREAM_TRANSPORT: "http",
+        MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT: "9100",
+      },
+      argv: ["node", "index.js", "http://localhost:3001/mcp"],
+    });
+    expect(config.auth.callbackPort).toBe(9100);
+    expect(config.auth.callbackPortExplicit).toBe(true);
   });
 
   it("parses the basic auth scheme and a static token", () => {

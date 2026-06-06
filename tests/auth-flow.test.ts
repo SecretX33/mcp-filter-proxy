@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -216,12 +217,24 @@ describe("interactive upstream OAuth flow", () => {
       token: null,
       tokenScheme: "bearer",
       callbackPort,
+      callbackPortExplicit: true,
       scope: "openid email profile",
       resource: null,
       clientName: "Test Proxy",
       storeDir: storeDir,
     },
   });
+
+  // Occupy the callback port for the duration of `fn`, asserting the proxy never tries to bind it.
+  const withCallbackPortHeld = async (fn: () => Promise<void>) => {
+    const held = createServer((_req, res) => res.end());
+    await new Promise<void>((resolve) => held.listen(callbackPort, "127.0.0.1", resolve));
+    try {
+      await fn();
+    } finally {
+      held.close();
+    }
+  };
 
   // A fake browser: following the authorize redirect lands on the loopback callback,
   // which captures the authorization code — exactly what a real browser would cause.
@@ -268,12 +281,15 @@ describe("interactive upstream OAuth flow", () => {
     const authorizeAfterFirst = mock.stats.authorizeHits;
 
     const opener = makeOpener();
-    const client = await connect(opener.open);
-
-    expect(opener.calls).toHaveLength(0);
-    expect(mock.stats.authorizeHits).toBe(authorizeAfterFirst);
-    expect((await client.listTools()).tools.map((t) => t.name)).toContain("ping");
-    await client.close();
+    // The callback port stays occupied throughout: a cached-token run must never try to bind it,
+    // which is what lets parallel instances start without colliding on the default port.
+    await withCallbackPortHeld(async () => {
+      const client = await connect(opener.open);
+      expect(opener.calls).toHaveLength(0);
+      expect(mock.stats.authorizeHits).toBe(authorizeAfterFirst);
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain("ping");
+      await client.close();
+    });
   });
 
   it("refreshes an expired access token without re-authorizing", async () => {
@@ -284,12 +300,15 @@ describe("interactive upstream OAuth flow", () => {
     mock.stats.expireAccessTokens();
 
     const opener = makeOpener();
-    const client = await connect(opener.open);
-
-    expect(opener.calls).toHaveLength(0);
-    expect(mock.stats.tokenRefreshHits).toBeGreaterThanOrEqual(1);
-    expect(mock.stats.authorizeHits).toBe(authorizeAfterFirst);
-    expect((await client.listTools()).tools.map((t) => t.name)).toContain("ping");
-    await client.close();
+    // A refresh uses the refresh_token grant (no browser redirect), so the callback port must stay
+    // free even though the cached access token is no longer valid.
+    await withCallbackPortHeld(async () => {
+      const client = await connect(opener.open);
+      expect(opener.calls).toHaveLength(0);
+      expect(mock.stats.tokenRefreshHits).toBeGreaterThanOrEqual(1);
+      expect(mock.stats.authorizeHits).toBe(authorizeAfterFirst);
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain("ping");
+      await client.close();
+    });
   });
 });

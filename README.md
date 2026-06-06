@@ -112,7 +112,7 @@ There is no single required variable, but you must give the proxy something to c
 | `MCP_FILTER_PROXY_UPSTREAM_AUTH` | `auto` | `auto` performs an interactive browser OAuth flow when the upstream replies `401`; `none` disables it |
 | `MCP_FILTER_PROXY_AUTH_TOKEN` | — | Pre-obtained credential sent as `Authorization: <scheme> <token>`. Takes precedence over OAuth (good for CI/headless). The value is sent verbatim after the scheme |
 | `MCP_FILTER_PROXY_AUTH_SCHEME` | `bearer` | Scheme for `MCP_FILTER_PROXY_AUTH_TOKEN`: `bearer` or `basic`. For `basic`, the token must be the base64 of `username:password` (e.g. `printf 'user:pass' \| base64`) |
-| `MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT` | `8661` | Loopback port the OAuth redirect callback listens on |
+| `MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT` | `8661` | Loopback port the OAuth redirect callback listens on. Left at the default, a busy port is skipped for the next free one (so concurrent first-time sign-ins don't collide); set it explicitly to pin a single port |
 | `MCP_FILTER_PROXY_OAUTH_SCOPE` | `openid email profile` | OAuth scope to request. Scopes the server advertises (via `WWW-Authenticate` or protected-resource metadata) take precedence; this is the fallback when it advertises none. Some servers (e.g. Atlassian) only return resources/prompts to a scoped token, so the default is non-empty |
 | `MCP_FILTER_PROXY_OAUTH_RESOURCE` | — | RFC 8707 `resource` (audience) to bind the token to. Omit to send none unless the server's protected-resource metadata supplies one. Useful for audience-bound tokens or multi-tenant servers |
 | `MCP_FILTER_PROXY_OAUTH_CLIENT_NAME` | `MCP Filter Proxy` | `client_name` advertised during dynamic client registration |
