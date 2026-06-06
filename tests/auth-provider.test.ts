@@ -119,4 +119,53 @@ describe("ProxyOAuthClientProvider", () => {
     await provider.saveCodeVerifier("verifier-abc");
     expect(await provider.codeVerifier()).toBe("verifier-abc");
   });
+
+  it("isolates per-flow state in memory so a shared-store write can't corrupt another flow", async () => {
+    const a = makeProvider();
+    const b = makeProvider(); // same on-disk store, separate memory (mimics a second process)
+    await a.saveCodeVerifier("verifier-a");
+    await a.saveClientInformation({ client_id: "client-a", redirect_uris: ["http://a"] });
+    await a.saveTokens({ access_token: "token-a", token_type: "Bearer" });
+
+    // b runs its own flow against the same store, overwriting every file.
+    await b.saveCodeVerifier("verifier-b");
+    await b.saveClientInformation({ client_id: "client-b", redirect_uris: ["http://b"] });
+    await b.saveTokens({ access_token: "token-b", token_type: "Bearer" });
+
+    expect(await a.codeVerifier()).toBe("verifier-a");
+    expect((await a.clientInformation())?.client_id).toBe("client-a");
+    expect((await a.tokens())?.access_token).toBe("token-a");
+
+    expect(await b.codeVerifier()).toBe("verifier-b");
+    expect((await b.clientInformation())?.client_id).toBe("client-b");
+    expect((await b.tokens())?.access_token).toBe("token-b");
+  });
+
+  it("clears cached memory on invalidateCredentials so a later store value is read", async () => {
+    const provider = makeProvider();
+    await provider.saveTokens({ access_token: "old", token_type: "Bearer" });
+    expect((await provider.tokens())?.access_token).toBe("old"); // served from memory
+
+    await provider.invalidateCredentials("tokens"); // clears memory and removes the file
+    await store.saveTokens({ access_token: "new", token_type: "Bearer" }); // a fresh write lands
+
+    expect((await provider.tokens())?.access_token).toBe("new"); // memory cleared, disk re-read
+  });
+
+  it("ignores a persisted registration whose redirect_uri does not match the bound port", async () => {
+    await store.saveClientInformation({
+      client_id: "stale",
+      redirect_uris: ["http://127.0.0.1:1234/oauth/callback"],
+    });
+    // makeProvider's redirectUrl is http://127.0.0.1:8909/oauth/callback — no match.
+    expect(await makeProvider().clientInformation()).toBeUndefined();
+  });
+
+  it("reuses a persisted registration whose redirect_uri matches the bound port", async () => {
+    await store.saveClientInformation({
+      client_id: "match",
+      redirect_uris: ["http://127.0.0.1:8909/oauth/callback"],
+    });
+    expect((await makeProvider().clientInformation())?.client_id).toBe("match");
+  });
 });
