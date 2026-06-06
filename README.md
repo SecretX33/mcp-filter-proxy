@@ -20,8 +20,6 @@ The proxy is otherwise transparent: it advertises full client capabilities to th
 The upstream MCP server is reached using one of three transports. You can set
 `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect. 
 
-Setting `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly skips autodetection (and the Streamable HTTP↔SSE fallback): the chosen transport is used as-is.
-
 | Mode | When it activates                                                          | How it connects |
 | --- |----------------------------------------------------------------------------| --- |
 | **stdio** | `stdio`, or a command (not a URL) as the first positional argument | Spawns the wrapped command as a child process and talks over stdio |
@@ -69,7 +67,7 @@ To wrap a remote server over Streamable HTTP, pass its URL as the first argument
 }
 ```
 
-Leave `MCP_FILTER_PROXY_ALLOWED_TOOLS` out entirely to allow all tools (useful when you only want the transport-bridging feature).
+Leave `MCP_FILTER_PROXY_ALLOWED_TOOLS`/`MCP_FILTER_PROXY_DENIED_TOOLS` out entirely to allow all tools (useful when you only want the transport-bridging feature).
 
 ### Claude Code
 
