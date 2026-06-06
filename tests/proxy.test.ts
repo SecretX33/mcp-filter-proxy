@@ -84,9 +84,9 @@ async function setupProxy(
   ]);
 
   const full: ProxyFilters = {
-    tools: filters.tools ?? createFilterRule(null, null),
-    resources: filters.resources ?? createFilterRule(null, null),
-    prompts: filters.prompts ?? createFilterRule(null, null),
+    tools: filters.tools ?? createFilterRule({ allowed: null, denied: null }),
+    resources: filters.resources ?? createFilterRule({ allowed: null, denied: null }),
+    prompts: filters.prompts ?? createFilterRule({ allowed: null, denied: null }),
   };
   const proxyServer = createProxyServer(upstreamClient, full);
 
@@ -110,7 +110,8 @@ async function setupProxy(
   return downstreamClient;
 }
 
-const allow = (...names: string[]): FilterRule => createFilterRule(names, null);
+const allow = (...names: string[]): FilterRule =>
+  createFilterRule({ allowed: names, denied: null });
 
 describe("createProxyServer — tools", () => {
   it("lists only the allowed tools with a selective filter", async () => {
@@ -275,9 +276,9 @@ describe("connectUpstream — transport autodetection fallback", () => {
 });
 
 const allowAllFilters = (): ProxyFilters => ({
-  tools: createFilterRule(null, null),
-  resources: createFilterRule(null, null),
-  prompts: createFilterRule(null, null),
+  tools: createFilterRule({ allowed: null, denied: null }),
+  resources: createFilterRule({ allowed: null, denied: null }),
+  prompts: createFilterRule({ allowed: null, denied: null }),
 });
 
 describe("createProxyServer — client capabilities & server→client relay", () => {
@@ -370,9 +371,9 @@ describe("createProxyServer — client capabilities & server→client relay", ()
     ]);
 
     const proxyServer = createProxyServer(upstreamClient, {
-      tools: createFilterRule(null, null),
-      resources: createFilterRule(["jira-widget-openai"], null),
-      prompts: createFilterRule(null, null),
+      tools: createFilterRule({ allowed: null, denied: null }),
+      resources: createFilterRule({ allowed: ["jira-widget-openai"], denied: null }),
+      prompts: createFilterRule({ allowed: null, denied: null }),
     });
 
     const [proxySide, downSide] = InMemoryTransport.createLinkedPair();
