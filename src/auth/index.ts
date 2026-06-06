@@ -3,7 +3,7 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import type { ProxyConfig } from "../config.js";
 import { FileAuthStore } from "./store.js";
 import { startCallbackServer } from "./callback-server.js";
-import { openInBrowser, type OpenBrowser } from "./browser.js";
+import { type OpenBrowser, openInBrowser } from "./browser.js";
 import { ProxyOAuthClientProvider } from "./oauth-provider.js";
 
 /**

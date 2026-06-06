@@ -1,24 +1,24 @@
 #!/usr/bin/env node
 import { spawn } from "child_process";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { loadConfigOrExit, stripProxyEnv, type UpstreamTransport } from "./config.js";
-import { createAllowFilter, type ProxyFilters } from "./filter.js";
+import { createFilterRule, type ProxyFilters } from "./filter.js";
 import { createStdioUpstream } from "./transports/upstream-stdio.js";
 import { createSSEUpstream } from "./transports/upstream-sse.js";
 import { createHTTPUpstream } from "./transports/upstream-http.js";
 import { buildUpstreamAuth } from "./auth";
 import { startProxy } from "./proxy.js";
 import { PROJECT_INFO } from "./util";
+import { buildUpstreamOptions } from "./transports/options";
 
 async function main(): Promise<void> {
   console.error(`Starting mcp-filter-proxy version ${PROJECT_INFO.version}...`);
 
   const config = loadConfigOrExit(process.argv);
   const filters: ProxyFilters = {
-    tools: createAllowFilter(config.allowedTools),
-    resources: createAllowFilter(config.allowedResources),
-    prompts: createAllowFilter(config.allowedPrompts),
+    tools: createFilterRule(config.filters.tools),
+    resources: createFilterRule(config.filters.resources),
+    prompts: createFilterRule(config.filters.prompts),
   };
 
   // For sse/http upstream with a command: spawn the server process, wait for it
@@ -38,20 +38,8 @@ async function main(): Promise<void> {
     await waitForServer(config.url!, 15_000);
   }
 
-  const auth = await buildUpstreamAuth(config);
-  const staticAuthHeaders =
-    auth.kind === "static" ? (auth.requestInit.headers as Record<string, string>) : {};
-  const headers: Record<string, string> = { ...config.headers, ...staticAuthHeaders };
-
-  const transportOptions: {
-    authProvider?: OAuthClientProvider;
-    requestInit?: RequestInit;
-  } = {
-    ...(auth.kind === "oauth" ? { authProvider: auth.authProvider } : {}),
-    ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
-  };
-  const upstreamOptions =
-    Object.keys(transportOptions).length > 0 ? transportOptions : undefined;
+  const upstreamAuth = await buildUpstreamAuth(config);
+  const upstreamOptions = buildUpstreamOptions({ auth: upstreamAuth, config });
 
   const makeUpstreamTransport = (kind: UpstreamTransport): Transport => {
     switch (kind) {
@@ -70,7 +58,7 @@ async function main(): Promise<void> {
     makeUpstreamTransport,
     transport: config.transport,
     autoNegotiateRemote: config.autoNegotiateRemote,
-    oauth: auth.kind === "oauth" ? auth.runtime : undefined,
+    oauth: upstreamAuth.kind === "oauth" ? upstreamAuth.runtime : undefined,
     filters,
     exposeTransport: config.exposeTransport,
     exposePort: config.exposePort,

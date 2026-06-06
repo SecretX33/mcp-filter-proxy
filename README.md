@@ -18,15 +18,13 @@ The proxy is otherwise transparent: it advertises full client capabilities to th
 ## Connection Modes
 
 The upstream MCP server is reached using one of three transports. You can set
-`MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect.
-
-Setting `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly skips autodetection (and the http→sse fallback): the chosen transport is used as-is.
+`MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` explicitly, or leave it unset and let the proxy autodetect. 
 
 | Mode | When it activates                                                          | How it connects |
 | --- |----------------------------------------------------------------------------| --- |
-| **stdio** | `stdio`, or a command with no `SERVER_URL` | Spawns the wrapped command as a child process and talks over stdio |
-| **SSE** | `sse` + `MCP_FILTER_PROXY_SERVER_URL`  | Connects over Server-Sent Events (for older servers not yet on Streamable HTTP) |
-| **HTTP** | `http`, or autodetected from `MCP_FILTER_PROXY_SERVER_URL` | Connects over Streamable HTTP (falling back to SSE when autodetected) |
+| **stdio** | `stdio`, or a command (not a URL) as the first positional argument | Spawns the wrapped command as a child process and talks over stdio |
+| **SSE** | `sse`, or autodetected when the URL path ends in `/sse` | Connects over Server-Sent Events (for older servers not yet on Streamable HTTP) |
+| **HTTP** | `http`, or autodetected when the first positional argument is an http(s) URL without an `/sse` path | Connects over Streamable HTTP |
 
 ## Using with AI Tools
 
@@ -53,16 +51,15 @@ To filter a local stdio server (the most common case), pass the wrapped command 
 }
 ```
 
-To wrap a remote server over Streamable HTTP, point at its URL instead. The proxy re-exposes it as a stdio server to your client:
+To wrap a remote server over Streamable HTTP, pass its URL as the first argument (any positional argument that parses as an http(s) URL is treated as the upstream server). The proxy re-exposes it as a stdio server to your client:
 
 ```json5
 {
   "mcpServers": {
     "filtered-http-server": {
       "command": "npx",
-      "args": ["-y", "mcp-filter-proxy"],
+      "args": ["-y", "mcp-filter-proxy", "http://my-server:3001/mcp"],
       "env": {
-        "MCP_FILTER_PROXY_SERVER_URL": "http://my-server:3001/mcp",
         "MCP_FILTER_PROXY_ALLOWED_TOOLS": "run_query,list_schemas"
       }
     }
@@ -70,7 +67,7 @@ To wrap a remote server over Streamable HTTP, point at its URL instead. The prox
 }
 ```
 
-Leave `MCP_FILTER_PROXY_ALLOWED_TOOLS` out entirely to allow all tools (useful when you only want the transport-bridging feature).
+Leave `MCP_FILTER_PROXY_ALLOWED_TOOLS`/`MCP_FILTER_PROXY_DENIED_TOOLS` out entirely to allow all tools (useful when you only want the transport-bridging feature).
 
 ### Claude Code
 
@@ -90,18 +87,20 @@ All configuration is via environment variables.
 
 ### Required
 
-There is no single required variable, but you must give the proxy something to connect to: either a command to spawn (passed as positional arguments, for a stdio upstream) or `MCP_FILTER_PROXY_SERVER_URL` (for a remote upstream). The transport is then autodetected unless you set `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT`.
+There is no single required variable, but you must give the proxy something to connect to as positional arguments: either a command to spawn (for a stdio upstream) or an http(s) URL (for a remote upstream). The transport is then autodetected unless you set `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT`.
 
 ### Optional
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` | *(auto)* | Upstream transport: `stdio`, `sse`, or `http`. Leave unset to autodetect (`http`-first with SSE fallback when a URL is given, else `stdio`). Set it to force a specific transport with no fallback |
-| `MCP_FILTER_PROXY_SERVER_URL` | — | URL of the upstream MCP server (e.g. `http://localhost:3001/mcp`). Required for an `sse`/`http` upstream |
+| `MCP_FILTER_PROXY_UPSTREAM_TRANSPORT` | *(auto)* | Upstream transport: `stdio`, `sse`, or `http`. Leave unset to autodetect: a URL argument connects over Streamable HTTP, or SSE when its path ends in `/sse`, with fallback to the other variant; otherwise `stdio`. Set it to force a specific transport with no fallback |
 | `MCP_FILTER_PROXY_HEADERS` | `{}` | Extra headers to send to an http/sse upstream, as a JSON object (e.g. `{"X-Api-Key":"${MY_KEY}"}`). Values may reference env vars via `${VAR}`, expanded at startup |
-| `MCP_FILTER_PROXY_ALLOWED_TOOLS` | *(allow all)* | Comma-separated list of allowed tool names. Omit or leave empty to allow everything |
-| `MCP_FILTER_PROXY_ALLOWED_RESOURCES` | *(allow all)* | Comma-separated list of allowed resource **names**. Disallowed resources are hidden from listings and `resources/read` of one is rejected. This also governs MCP-UI app/widget resources (e.g. Atlassian's Jira/Confluence widgets), which are exposed as ordinary resources |
-| `MCP_FILTER_PROXY_ALLOWED_PROMPTS` | *(allow all)* | Comma-separated list of allowed prompt names. Disallowed prompts are hidden from listings and `prompts/get` of one is rejected |
+| `MCP_FILTER_PROXY_ALLOWED_TOOLS` | *(all)* | Comma-separated list of tool-name [globs](#filtering-with-globs) to expose. Omit to allow everything |
+| `MCP_FILTER_PROXY_DENIED_TOOLS` | *(none)* | Comma-separated list of tool-name globs to hide. Everything else is exposed |
+| `MCP_FILTER_PROXY_ALLOWED_RESOURCES` | *(all)* | Comma-separated list of resource-**name** globs to expose. Disallowed resources are hidden from listings and `resources/read` of one is rejected. This also governs MCP-UI app/widget resources (e.g. Atlassian's Jira/Confluence widgets), which are exposed as ordinary resources |
+| `MCP_FILTER_PROXY_DENIED_RESOURCES` | *(none)* | Comma-separated list of resource-name globs to hide. Everything else is exposed |
+| `MCP_FILTER_PROXY_ALLOWED_PROMPTS` | *(all)* | Comma-separated list of prompt-name globs to expose. Disallowed prompts are hidden from listings and `prompts/get` of one is rejected |
+| `MCP_FILTER_PROXY_DENIED_PROMPTS` | *(none)* | Comma-separated list of prompt-name globs to hide. Everything else is exposed |
 | `MCP_FILTER_PROXY_EXPOSE_TRANSPORT` | `stdio` | How to expose the proxy to clients: `stdio` or `http` |
 | `MCP_FILTER_PROXY_EXPOSE_PORT` | `8808` | Port for the HTTP expose server |
 | `MCP_FILTER_PROXY_EXPOSE_HOST` | `127.0.0.1` | Bind address for the HTTP expose server |
@@ -118,6 +117,20 @@ There is no single required variable, but you must give the proxy something to c
 | `MCP_FILTER_PROXY_OAUTH_RESOURCE` | — | RFC 8707 `resource` (audience) to bind the token to. Omit to send none unless the server's protected-resource metadata supplies one. Useful for audience-bound tokens or multi-tenant servers |
 | `MCP_FILTER_PROXY_OAUTH_CLIENT_NAME` | `MCP Filter Proxy` | `client_name` advertised during dynamic client registration |
 | `MCP_FILTER_PROXY_OAUTH_STORE_DIR` | `~/.mcp-auth/mcp-filter-proxy-<version>/oauth` | Directory where OAuth tokens and registration are cached |
+
+## Filtering with globs
+
+Each kind (tools, resources, prompts) can be filtered with **either** an allowlist (`ALLOWED_*`, expose only matches) **or** a denylist (`DENIED_*`, expose everything except matches).
+
+| Pattern | Matches |
+| --- | --- |
+| `read_file` | exactly `read_file` |
+| `read_*` | names starting with `read_` |
+| `*_file` | names ending with `_file` |
+| `*search*` | names containing `search` |
+| `[Rr]ead_file` | either `read_file` or `Read_file` (a `[...]` set matches one character from it) |
+
+Matching is case-sensitive, so a `[...]` character class is the way to accept more than one casing of a letter.
 
 ## Authenticating to OAuth-protected upstreams
 
@@ -142,17 +155,17 @@ Open the **Tools** tab, then copy the names you want into `MCP_FILTER_PROXY_ALLO
 ```bash
 git clone https://github.com/SecretX33/mcp-filter-proxy.git
 cd mcp-filter-proxy
-npm install
-npm run build
+pnpm install
+pnpm build
 ```
 
 The compiled server is written to `dist/index.js`. Run in watch mode during development:
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
-Run the test suite with `npm test`.
+Run the test suite with `pnpm test`.
 
 ## License
 

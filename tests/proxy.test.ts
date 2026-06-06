@@ -10,7 +10,7 @@ import {
   connectUpstream,
   UPSTREAM_CLIENT_CAPABILITIES,
 } from "../src/proxy.js";
-import { createAllowFilter, type AllowFilter, type ProxyFilters } from "../src/filter.js";
+import { createFilterRule, type FilterRule, type ProxyFilters } from "../src/filter.js";
 
 const TOOL_NAMES = ["read_file", "write_file", "delete_file"];
 const RESOURCES = [
@@ -84,9 +84,9 @@ async function setupProxy(
   ]);
 
   const full: ProxyFilters = {
-    tools: filters.tools ?? createAllowFilter(null),
-    resources: filters.resources ?? createAllowFilter(null),
-    prompts: filters.prompts ?? createAllowFilter(null),
+    tools: filters.tools ?? createFilterRule({ allowed: null, denied: null }),
+    resources: filters.resources ?? createFilterRule({ allowed: null, denied: null }),
+    prompts: filters.prompts ?? createFilterRule({ allowed: null, denied: null }),
   };
   const proxyServer = createProxyServer(upstreamClient, full);
 
@@ -110,7 +110,8 @@ async function setupProxy(
   return downstreamClient;
 }
 
-const allow = (...names: string[]): AllowFilter => createAllowFilter(new Set(names));
+const allow = (...names: string[]): FilterRule =>
+  createFilterRule({ allowed: names, denied: null });
 
 describe("createProxyServer — tools", () => {
   it("lists only the allowed tools with a selective filter", async () => {
@@ -263,6 +264,34 @@ describe("connectUpstream — transport autodetection fallback", () => {
     await client.close();
   });
 
+  it("falls back from sse to http on a transport mismatch and connects", async () => {
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    const upstreamServer = buildUpstreamServer();
+    await upstreamServer.connect(serverSide);
+    cleanups.push(async () => {
+      await upstreamServer.close();
+    });
+
+    const client = new Client({ name: "c", version: "1.0.0" });
+    let httpAttempts = 0;
+    let sseAttempts = 0;
+    const make = (kind: "stdio" | "sse" | "http"): Transport => {
+      if (kind === "sse") {
+        sseAttempts++;
+        return mismatchTransport();
+      }
+      httpAttempts++;
+      return clientSide;
+    };
+
+    await connectUpstream(client, make, { transport: "sse", autoNegotiateRemote: true });
+
+    expect(sseAttempts).toBe(1);
+    expect(httpAttempts).toBe(1);
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+    await client.close();
+  });
+
   it("does not fall back when the transport was set explicitly", async () => {
     const client = new Client({ name: "c", version: "1.0.0" });
     await expect(
@@ -275,9 +304,9 @@ describe("connectUpstream — transport autodetection fallback", () => {
 });
 
 const allowAllFilters = (): ProxyFilters => ({
-  tools: createAllowFilter(null),
-  resources: createAllowFilter(null),
-  prompts: createAllowFilter(null),
+  tools: createFilterRule({ allowed: null, denied: null }),
+  resources: createFilterRule({ allowed: null, denied: null }),
+  prompts: createFilterRule({ allowed: null, denied: null }),
 });
 
 describe("createProxyServer — client capabilities & server→client relay", () => {
@@ -370,9 +399,9 @@ describe("createProxyServer — client capabilities & server→client relay", ()
     ]);
 
     const proxyServer = createProxyServer(upstreamClient, {
-      tools: createAllowFilter(null),
-      resources: createAllowFilter(new Set(["jira-widget-openai"])),
-      prompts: createAllowFilter(null),
+      tools: createFilterRule({ allowed: null, denied: null }),
+      resources: createFilterRule({ allowed: ["jira-widget-openai"], denied: null }),
+      prompts: createFilterRule({ allowed: null, denied: null }),
     });
 
     const [proxySide, downSide] = InMemoryTransport.createLinkedPair();

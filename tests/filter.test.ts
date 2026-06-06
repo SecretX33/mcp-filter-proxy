@@ -1,17 +1,45 @@
 import { describe, it, expect } from "vitest";
-import { createAllowFilter, filterByKey, isAllowed } from "../src/filter.js";
+import { createFilterRule, filterByKey, isAllowed } from "../src/filter.js";
 
-describe("createAllowFilter / isAllowed", () => {
-  it("allows everything when the allowlist is null", () => {
-    const filter = createAllowFilter(null);
-    expect(isAllowed("anything", filter)).toBe(true);
+describe("createFilterRule / isAllowed", () => {
+  it("allows everything when neither list is set", () => {
+    const rule = createFilterRule({ allowed: null, denied: null });
+    expect(rule.mode).toBe("allow-all");
+    expect(isAllowed("anything", rule)).toBe(true);
   });
 
-  it("allows only the listed keys when the allowlist is a set", () => {
-    const filter = createAllowFilter(new Set(["read_file", "list_dir"]));
-    expect(isAllowed("read_file", filter)).toBe(true);
-    expect(isAllowed("list_dir", filter)).toBe(true);
-    expect(isAllowed("delete_file", filter)).toBe(false);
+  it("allows only the listed names in allow mode", () => {
+    const rule = createFilterRule({ allowed: ["read_file", "list_dir"], denied: null });
+    expect(isAllowed("read_file", rule)).toBe(true);
+    expect(isAllowed("list_dir", rule)).toBe(true);
+    expect(isAllowed("delete_file", rule)).toBe(false);
+  });
+
+  it("blocks the listed names in deny mode and allows the rest", () => {
+    const rule = createFilterRule({ allowed: null, denied: ["delete_file"] });
+    expect(isAllowed("delete_file", rule)).toBe(false);
+    expect(isAllowed("read_file", rule)).toBe(true);
+  });
+
+  it("matches glob patterns (prefix, suffix, contains)", () => {
+    const allow = createFilterRule({
+      allowed: ["read_*", "*_meta", "*search*"],
+      denied: null,
+    });
+    expect(isAllowed("read_file", allow)).toBe(true);
+    expect(isAllowed("page_meta", allow)).toBe(true);
+    expect(isAllowed("jira_search_v2", allow)).toBe(true);
+    expect(isAllowed("write_file", allow)).toBe(false);
+
+    const deny = createFilterRule({ allowed: null, denied: ["*delete*"] });
+    expect(isAllowed("hard_delete_all", deny)).toBe(false);
+    expect(isAllowed("read_file", deny)).toBe(true);
+  });
+
+  it("throws when both allow and deny are given", () => {
+    expect(() => createFilterRule({ allowed: ["a"], denied: ["b"] })).toThrow(
+      /mutually exclusive/,
+    );
   });
 });
 
@@ -25,27 +53,42 @@ describe("filterByKey", () => {
     { uri: "test://b", name: "b" },
   ];
 
-  it("returns all items when the filter allows everything", () => {
-    expect(filterByKey(tools, byName, createAllowFilter(null))).toHaveLength(3);
+  it("returns all items when the rule allows everything", () => {
+    expect(
+      filterByKey(tools, byName, createFilterRule({ allowed: null, denied: null })),
+    ).toHaveLength(3);
   });
 
-  it("filters by a name key", () => {
-    const result = filterByKey(tools, byName, createAllowFilter(new Set(["read_file"])));
+  it("keeps only allowed names", () => {
+    const result = filterByKey(
+      tools,
+      byName,
+      createFilterRule({ allowed: ["read_file"], denied: null }),
+    );
     expect(result.map((t) => t.name)).toEqual(["read_file"]);
   });
 
-  it("filters by a uri key", () => {
+  it("drops denied names", () => {
+    const result = filterByKey(
+      tools,
+      byName,
+      createFilterRule({ allowed: null, denied: ["*_file"] }),
+    );
+    expect(result.map((t) => t.name)).toEqual([]);
+  });
+
+  it("filters by a uri key with a glob", () => {
     const result = filterByKey(
       resources,
       byUri,
-      createAllowFilter(new Set(["test://b"])),
+      createFilterRule({ allowed: ["test://b"], denied: null }),
     );
     expect(result.map((r) => r.uri)).toEqual(["test://b"]);
   });
 
-  it("returns an empty array when nothing matches", () => {
-    expect(filterByKey(tools, byName, createAllowFilter(new Set(["nope"])))).toHaveLength(
-      0,
-    );
+  it("returns an empty array when nothing matches an allowlist", () => {
+    expect(
+      filterByKey(tools, byName, createFilterRule({ allowed: ["nope"], denied: null })),
+    ).toHaveLength(0);
   });
 });
