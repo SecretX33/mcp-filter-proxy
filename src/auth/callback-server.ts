@@ -3,10 +3,16 @@ import { createServer, type Server } from "node:http";
 const CALLBACK_PATH = "/oauth/callback";
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 const CALLBACK_HOST = "127.0.0.1"; // RFC 8252: use the loopback IP literal, not "localhost"
+const MAX_PORT_SCAN = 100; // How many successive ports to try when the configured one is busy and cycling is enabled
 
 export interface CallbackServer {
   /** The redirect_uri the authorization server should send the user back to. */
   readonly redirectUrl: string;
+  /**
+   * Bind the loopback socket, idempotently. With `cycle`, a busy port is skipped for the next free
+   * one; without it, a busy port fails immediately.
+   */
+  listen(opts: { cycle: boolean }): Promise<void>;
   /** Resolves with the authorization `code` once the browser hits the callback. */
   waitForCode(): Promise<string>;
   /** Stop listening. Safe to call multiple times. */
@@ -18,16 +24,24 @@ const html = (message: string) =>
   `<body style="font-family:system-ui;padding:2rem"><h2>${message}</h2>` +
   `<p>You can close this window and return to your application.</p></body></html>`;
 
+const isAddrInUse = (err: unknown): boolean =>
+  (err as { code?: string } | null)?.code === "EADDRINUSE";
+
 /**
  * Starts a loopback HTTP server that captures the OAuth redirect.
  * The expected `state` is validated to guard against CSRF / stray requests.
  */
-export function startCallbackServer(options: {
+export function createCallbackServer(options: {
   port: number;
   expectedState: string;
   timeoutMs?: number;
-}): Promise<CallbackServer> {
-  const { port, expectedState, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+}): CallbackServer {
+  const { port: startPort, expectedState, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+
+  let resolvedPort = startPort;
+  let server: Server | undefined;
+  let listenPromise: Promise<void> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   let resolveCode!: (code: string) => void;
   let rejectCode!: (err: Error) => void;
@@ -41,73 +55,110 @@ export function startCallbackServer(options: {
   // real consumers still observe it through the returned promise reference.
   void codePromise.catch(() => {});
 
-  const server: Server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", `http://${CALLBACK_HOST}:${port}`);
-    if (url.pathname !== CALLBACK_PATH) {
-      res.writeHead(404).end();
-      return;
-    }
-
-    const error = url.searchParams.get("error");
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-
-    if (error) {
-      const desc = url.searchParams.get("error_description") ?? "";
-      res
-        .writeHead(400, { "content-type": "text/html" })
-        .end(html("Authorization failed."));
-      fail(new Error(`Authorization error: ${error}${desc ? ` (${desc})` : ""}`));
-      return;
-    }
-    if (state !== expectedState) {
-      res.writeHead(400, { "content-type": "text/html" }).end(html("Invalid state."));
-      fail(new Error("OAuth state mismatch on callback (possible CSRF)"));
-      return;
-    }
-    if (!code) {
-      res.writeHead(400, { "content-type": "text/html" }).end(html("Missing code."));
-      fail(new Error("OAuth callback did not include an authorization code"));
-      return;
-    }
-
-    res
-      .writeHead(200, { "content-type": "text/html" })
-      .end(html("Authorization complete."));
-    if (!settled) {
-      settled = true;
-      resolveCode(code);
-    }
-  });
-
-  const timer = setTimeout(() => {
-    fail(new Error(`Timed out waiting for OAuth authorization after ${timeoutMs}ms`));
-  }, timeoutMs);
-  timer.unref?.();
-
   function fail(err: Error): void {
     if (settled) return;
     settled = true;
     rejectCode(err);
   }
 
-  const close = () => {
-    clearTimeout(timer);
-    server.close();
-  };
+  const makeServer = (): Server =>
+    createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://${CALLBACK_HOST}`);
+      if (url.pathname !== CALLBACK_PATH) {
+        res.writeHead(404).end();
+        return;
+      }
 
-  return new Promise<CallbackServer>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, CALLBACK_HOST, () => {
-      server.removeListener("error", reject);
+      const error = url.searchParams.get("error");
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+
+      if (error) {
+        const desc = url.searchParams.get("error_description") ?? "";
+        res
+          .writeHead(400, { "content-type": "text/html" })
+          .end(html("Authorization failed."));
+        fail(new Error(`Authorization error: ${error}${desc ? ` (${desc})` : ""}`));
+        return;
+      }
+      if (state !== expectedState) {
+        res.writeHead(400, { "content-type": "text/html" }).end(html("Invalid state."));
+        fail(new Error("OAuth state mismatch on callback (possible CSRF)"));
+        return;
+      }
+      if (!code) {
+        res.writeHead(400, { "content-type": "text/html" }).end(html("Missing code."));
+        fail(new Error("OAuth callback did not include an authorization code"));
+        return;
+      }
+
+      res
+        .writeHead(200, { "content-type": "text/html" })
+        .end(html("Authorization complete."));
+      if (!settled) {
+        settled = true;
+        resolveCode(code);
+      }
+    });
+
+  const bindOnce = (srv: Server, port: number): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const onError = (err: Error) => {
+        srv.removeListener("listening", onListening);
+        reject(err);
+      };
+      const onListening = () => {
+        srv.removeListener("error", onError);
+        resolve();
+      };
+      srv.once("error", onError);
+      srv.once("listening", onListening);
+      srv.listen(port, CALLBACK_HOST);
+    });
+
+  const start = async (cycle: boolean): Promise<void> => {
+    const maxTries = cycle ? MAX_PORT_SCAN : 1;
+    for (let i = 0; i < maxTries; i++) {
+      const port = startPort + i;
+      if (port > 65535) break;
+      const srv = makeServer();
+      try {
+        await bindOnce(srv, port);
+      } catch (err) {
+        srv.close();
+        if (isAddrInUse(err)) continue;
+        throw err;
+      }
+      server = srv;
+      resolvedPort = port;
+      timer = setTimeout(() => {
+        fail(new Error(`Timed out waiting for OAuth authorization after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
       console.error(
         `OAuth callback server listening on http://${CALLBACK_HOST}:${port}${CALLBACK_PATH}`,
       );
-      resolve({
-        redirectUrl: `http://${CALLBACK_HOST}:${port}${CALLBACK_PATH}`,
-        waitForCode: () => codePromise,
-        close,
-      });
-    });
-  });
+      return;
+    }
+    const lastPort = Math.min(startPort + maxTries - 1, 65535);
+    throw new Error(
+      `Could not bind an OAuth callback port (tried ${cycle ? `${startPort}-${lastPort}` : startPort}). ` +
+        `Set MCP_FILTER_PROXY_OAUTH_CALLBACK_PORT to a free port.`,
+    );
+  };
+
+  return {
+    get redirectUrl(): string {
+      return `http://${CALLBACK_HOST}:${resolvedPort}${CALLBACK_PATH}`;
+    },
+    listen({ cycle }) {
+      if (!listenPromise) listenPromise = start(cycle);
+      return listenPromise;
+    },
+    waitForCode: () => codePromise,
+    close() {
+      if (timer) clearTimeout(timer);
+      server?.close();
+    },
+  };
 }

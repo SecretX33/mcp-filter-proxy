@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { ProxyConfig } from "../config.js";
 import { FileAuthStore } from "./store.js";
-import { startCallbackServer } from "./callback-server.js";
+import { createCallbackServer } from "./callback-server.js";
 import { type OpenBrowser, openInBrowser } from "./browser.js";
 import { ProxyOAuthClientProvider } from "./oauth-provider.js";
 
@@ -45,10 +45,15 @@ export async function buildUpstreamAuth(
 
   const store = new FileAuthStore(config.url!, auth.storeDir);
   const state = randomUUID();
-  const callback = await startCallbackServer({
+  const callback = createCallbackServer({
     port: auth.callbackPort,
     expectedState: state,
   });
+
+  // Bind the loopback callback only when an interactive sign-in is actually imminent (no cached token)
+  if (!(await store.tokens())) {
+    await callback.listen({ cycle: !auth.callbackPortExplicit });
+  }
 
   const authProvider = new ProxyOAuthClientProvider({
     store,
@@ -58,6 +63,7 @@ export async function buildUpstreamAuth(
     clientName: auth.clientName,
     scope: auth.scope,
     resource: auth.resource,
+    onBeforeRedirect: () => callback.listen({ cycle: false }),
   });
 
   return {

@@ -22,6 +22,9 @@ export interface OAuthProviderOptions {
   scope: string;
   /** RFC 8707 resource/audience to bind the token to, or null to omit it. */
   resource?: string | null;
+  /** Invoked just before the browser is opened, to bind the loopback callback server lazily when an
+   * interactive sign-in is actually starting. */
+  onBeforeRedirect?: () => Promise<void>;
 }
 
 /**
@@ -32,6 +35,11 @@ export interface OAuthProviderOptions {
  */
 export class ProxyOAuthClientProvider implements OAuthClientProvider {
   constructor(private readonly opts: OAuthProviderOptions) {}
+
+  // Per-flow OAuth state cache
+  private memoryClientInfo?: OAuthClientInformationFull;
+  private memoryTokens?: OAuthTokens;
+  private memoryCodeVerifier?: string;
 
   get redirectUrl(): string {
     return this.opts.redirectUrl;
@@ -51,7 +59,7 @@ export class ProxyOAuthClientProvider implements OAuthClientProvider {
   /**
    * Choose the RFC 8707 `resource` to send on the authorize/token requests. A configured resource
    * wins; otherwise we honor the one advertised by the server's Protected Resource Metadata; if
-   * neither exists we return undefined so the parameter is omitted (the SDK's default, which avoids
+   * neither exists we return `undefined` so the parameter is omitted (the SDK's default, which avoids
    * upsetting servers that don't expect it).
    */
   async validateResourceURL(
@@ -67,32 +75,42 @@ export class ProxyOAuthClientProvider implements OAuthClientProvider {
     return this.opts.state;
   }
 
-  clientInformation(): Promise<OAuthClientInformationFull | undefined> {
-    return this.opts.store.clientInformation();
+  async clientInformation(): Promise<OAuthClientInformationFull | undefined> {
+    if (this.memoryClientInfo) return this.memoryClientInfo;
+    const stored = await this.opts.store.clientInformation();
+    // Reuse a persisted registration only if its redirect_uri matches the port this process bound;
+    // a concurrent run may have cycled to another port, so a mismatch forces a fresh registration.
+    if (!stored?.redirect_uris?.includes(this.opts.redirectUrl)) return undefined;
+    this.memoryClientInfo = stored;
+    return stored;
   }
 
-  saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
-    return this.opts.store.saveClientInformation(info);
+  async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+    this.memoryClientInfo = info;
+    await this.opts.store.saveClientInformation(info);
   }
 
-  tokens(): Promise<OAuthTokens | undefined> {
-    return this.opts.store.tokens();
+  async tokens(): Promise<OAuthTokens | undefined> {
+    return this.memoryTokens ?? (await this.opts.store.tokens());
   }
 
-  saveTokens(tokens: OAuthTokens): Promise<void> {
-    return this.opts.store.saveTokens(tokens);
+  async saveTokens(tokens: OAuthTokens): Promise<void> {
+    this.memoryTokens = tokens;
+    await this.opts.store.saveTokens(tokens);
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    await this.opts.onBeforeRedirect?.();
     await this.opts.openBrowser(authorizationUrl.toString());
   }
 
-  saveCodeVerifier(verifier: string): Promise<void> {
-    return this.opts.store.saveCodeVerifier(verifier);
+  async saveCodeVerifier(verifier: string): Promise<void> {
+    this.memoryCodeVerifier = verifier;
+    await this.opts.store.saveCodeVerifier(verifier);
   }
 
   async codeVerifier(): Promise<string> {
-    const verifier = await this.opts.store.codeVerifier();
+    const verifier = this.memoryCodeVerifier ?? (await this.opts.store.codeVerifier());
     if (!verifier) {
       throw new Error(
         "Missing PKCE code verifier; the OAuth flow was not started correctly",
@@ -112,6 +130,9 @@ export class ProxyOAuthClientProvider implements OAuthClientProvider {
   invalidateCredentials(
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ): Promise<void> {
+    if (scope === "all" || scope === "client") this.memoryClientInfo = undefined;
+    if (scope === "all" || scope === "tokens") this.memoryTokens = undefined;
+    if (scope === "all" || scope === "verifier") this.memoryCodeVerifier = undefined;
     return this.opts.store.invalidate(scope);
   }
 }

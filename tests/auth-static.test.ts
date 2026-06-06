@@ -26,6 +26,7 @@ const makeConfig = (
     token,
     tokenScheme,
     callbackPort: 8661,
+    callbackPortExplicit: false,
     scope: "openid email profile",
     resource: null,
     clientName: "Test Proxy",
