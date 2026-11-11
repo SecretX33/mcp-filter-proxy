@@ -13,33 +13,86 @@ const registry = "https://registry.npmjs.org/";
 const npmVersion = "12.2.2";
 const predicateType = "https://slsa.dev/provenance/v1";
 
-export function loadNpm(directory) {
+type PackageManifest = Record<string, unknown> & { name: string; version: string };
+type ProvenanceSubject = { name: string; digest: { sha512: string } };
+
+export type NpmPublisher = {
+  generateProvenance: (
+    subjects: ProvenanceSubject[],
+    options: Record<string, unknown>,
+  ) => Promise<unknown>;
+  verifyProvenance: (subject: ProvenanceSubject, path: string) => Promise<unknown>;
+  publish: (
+    manifest: PackageManifest,
+    tarball: Buffer,
+    options: {
+      registry: string;
+      access: "public";
+      defaultTag: "latest";
+      npmVersion: string;
+      forceAuth: { token: string };
+      provenanceFile: string;
+      timeout: number;
+      retry: { retries: number };
+    },
+  ) => Promise<unknown>;
+};
+
+type PublishEnvironment = NodeJS.ProcessEnv & {
+  ACTIONS_ID_TOKEN_REQUEST_URL: string;
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: string;
+  RELEASE_VERSION: string;
+  RELEASE_TARBALL: string;
+  DRY_RUN: "true" | "false";
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function loadNpm(directory: string | undefined): NpmPublisher {
   if (!directory)
     throw new Error(
       "NPM_DIRECTORY is missing. Install the pinned npm version and resolve its global installation directory.",
     );
   const require = createRequire(join(directory, "package.json"));
-  if (require("./package.json").version !== npmVersion) {
+  const manifest: unknown = require("./package.json");
+  if (!isRecord(manifest) || manifest.version !== npmVersion) {
     throw new Error(
       `Publishing requires npm ${npmVersion}. Reinstall the pinned publishing tooling before retrying.`,
     );
   }
   // npm's provenance helpers are internal, so the workflow pins the npm version.
-  const provenance = require(
+  const provenance: unknown = require(
     join(dirname(require.resolve("libnpmpublish")), "provenance.js"),
   );
-  const npm = { ...require("libnpmpublish"), ...provenance };
-  for (const name of ["publish", "generateProvenance", "verifyProvenance"]) {
+  const publisher: unknown = require("libnpmpublish");
+  if (!isRecord(publisher) || !isRecord(provenance)) {
+    throw new Error(
+      "Pinned npm returned invalid publishing modules. Reinstall the publishing tooling.",
+    );
+  }
+  const npm = { ...publisher, ...provenance };
+  for (const name of ["publish", "generateProvenance", "verifyProvenance"] as const) {
     if (typeof npm[name] !== "function") {
       throw new Error(
         `Pinned npm is missing ${name}. Check the publishing tooling installation and provenance helper compatibility.`,
       );
     }
   }
-  return npm;
+  return npm as NpmPublisher;
 }
 
-async function request(url, options, context, fetch) {
+async function request(
+  url: string | URL,
+  options: RequestInit,
+  context: string,
+  fetch: typeof globalThis.fetch,
+) {
   try {
     return await fetch(url, {
       ...options,
@@ -48,16 +101,18 @@ async function request(url, options, context, fetch) {
     });
   } catch (error) {
     throw new Error(
-      `${context}: request failed (${error.message}). Check network access and service availability.`,
+      `${context}: request failed (${errorMessage(error)}). Check network access and service availability.`,
     );
   }
 }
 
-async function responseJson(response, context) {
+async function responseJson(
+  response: Response,
+  context: string,
+): Promise<Record<string, unknown>> {
   try {
-    const value = await response.json();
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      throw new Error("Expected a JSON object");
+    const value: unknown = await response.json();
+    if (!isRecord(value)) throw new Error("Expected a JSON object");
     return value;
   } catch {
     throw new Error(
@@ -66,9 +121,12 @@ async function responseJson(response, context) {
   }
 }
 
-export async function readArtifact(path, version) {
+export async function readArtifact(
+  path: string,
+  version: string,
+): Promise<{ manifest: PackageManifest; tarball: Buffer }> {
   let tarball;
-  let manifest;
+  let manifest: unknown;
   try {
     tarball = await readFile(path);
     manifest = JSON.parse(
@@ -79,13 +137,20 @@ export async function readArtifact(path, version) {
     );
   } catch (error) {
     throw new Error(
-      `Cannot read the release tarball and its package/package.json: ${error.message}`,
+      `Cannot read the release tarball and its package/package.json: ${errorMessage(error)}`,
+    );
+  }
+  if (!isRecord(manifest)) {
+    throw new Error(
+      "Release package/package.json must contain a JSON object. Check the release build.",
     );
   }
   const url =
     typeof manifest.repository === "string"
       ? manifest.repository
-      : manifest.repository?.url;
+      : isRecord(manifest.repository)
+        ? manifest.repository.url
+        : undefined;
   if (
     manifest.name !== packageName ||
     manifest.version !== version ||
@@ -98,10 +163,13 @@ export async function readArtifact(path, version) {
       `Release asset must contain the public package ${packageName}@${version} with repository https://github.com/${repository}. Check the release build and selected tag.`,
     );
   }
-  return { manifest, tarball };
+  return {
+    manifest: { ...manifest, name: manifest.name, version: manifest.version },
+    tarball,
+  };
 }
 
-function validateEnvironment(env) {
+function validateEnvironment(env: NodeJS.ProcessEnv): asserts env is PublishEnvironment {
   if (
     env.GITHUB_ACTIONS !== "true" ||
     env.RUNNER_ENVIRONMENT !== "github-hosted" ||
@@ -132,15 +200,20 @@ function validateEnvironment(env) {
   }
   if (
     !/^\d+\.\d+\.\d+$/.test(env.RELEASE_VERSION ?? "") ||
-    !["true", "false"].includes(env.DRY_RUN)
+    (env.DRY_RUN !== "true" && env.DRY_RUN !== "false")
   ) {
     throw new Error(
       "RELEASE_VERSION must be a release version such as 0.1.4, and DRY_RUN must be exactly true or false.",
     );
   }
+  if (!env.RELEASE_TARBALL) {
+    throw new Error(
+      "RELEASE_TARBALL is missing. Set it to the downloaded release package before running the publisher.",
+    );
+  }
 }
 
-async function exchangeToken(env, fetch) {
+async function exchangeToken(env: PublishEnvironment, fetch: typeof globalThis.fetch) {
   const url = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL);
   if (url.protocol !== "https:")
     throw new Error("The GitHub OIDC endpoint must use HTTPS. Publishing is refused.");
@@ -162,7 +235,7 @@ async function exchangeToken(env, fetch) {
   if (typeof identity !== "string" || !identity)
     throw new Error("GitHub returned no OIDC identity token. Publishing is refused.");
   console.error(`::add-mask::${identity}`);
-  let claims;
+  let claims: unknown;
   try {
     claims = JSON.parse(
       Buffer.from(identity.split(".")[1], "base64url").toString("utf8"),
@@ -173,6 +246,7 @@ async function exchangeToken(env, fetch) {
     );
   }
   if (
+    !isRecord(claims) ||
     claims.repository !== repository ||
     claims.repository_visibility !== "public" ||
     claims.aud !== "npm:registry.npmjs.org"
@@ -204,6 +278,7 @@ async function exchangeToken(env, fetch) {
     credentials.token_type !== "oidc" ||
     typeof credentials.token !== "string" ||
     !credentials.token ||
+    typeof credentials.expires !== "string" ||
     !(Date.parse(credentials.expires) > Date.now() + 60_000)
   ) {
     throw new Error(
@@ -214,7 +289,11 @@ async function exchangeToken(env, fetch) {
   return credentials.token;
 }
 
-async function verifyPublished(version, integrity, fetch) {
+async function verifyPublished(
+  version: string,
+  integrity: string,
+  fetch: typeof globalThis.fetch,
+) {
   let problem;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -228,18 +307,29 @@ async function verifyPublished(version, integrity, fetch) {
       );
       if (!response.ok) throw new Error(`npm metadata returned HTTP ${response.status}`);
       const metadata = await responseJson(response, "Published npm metadata");
-      if (metadata._npmUser?.trustedPublisher?.id !== "github")
+      const publisher = metadata._npmUser;
+      if (
+        !isRecord(publisher) ||
+        !isRecord(publisher.trustedPublisher) ||
+        publisher.trustedPublisher.id !== "github"
+      )
         throw new Error("npm metadata does not identify a GitHub trusted publisher");
-      if (metadata.dist?.attestations?.provenance?.predicateType !== predicateType)
+      const dist = metadata.dist;
+      if (
+        !isRecord(dist) ||
+        !isRecord(dist.attestations) ||
+        !isRecord(dist.attestations.provenance) ||
+        dist.attestations.provenance.predicateType !== predicateType
+      )
         throw new Error("npm metadata does not contain SLSA provenance");
-      if (metadata.dist?.integrity !== integrity)
+      if (dist.integrity !== integrity)
         throw new Error("npm metadata does not match the uploaded tarball SHA-512");
       console.error(
         `Verified ${packageName}@${version}: GitHub trusted publisher, SLSA provenance, and matching tarball integrity.`,
       );
       return;
     } catch (error) {
-      problem = error.message;
+      problem = errorMessage(error);
       if (attempt < 4) await setTimeout(2_000);
     }
   }
@@ -252,6 +342,10 @@ export async function publishRelease({
   env = process.env,
   npm,
   fetch = globalThis.fetch,
+}: {
+  env?: NodeJS.ProcessEnv;
+  npm?: NpmPublisher;
+  fetch?: typeof globalThis.fetch;
 } = {}) {
   validateEnvironment(env);
   npm ??= loadNpm(env.NPM_DIRECTORY);
@@ -291,7 +385,7 @@ export async function publishRelease({
       await npm.verifyProvenance(subject, provenanceFile);
     } catch (error) {
       throw new Error(
-        `Provenance preflight failed: ${error.message}. No package was uploaded. Check id-token: write, public repository visibility, and access to Sigstore Fulcio and Rekor.`,
+        `Provenance preflight failed: ${errorMessage(error)}. No package was uploaded. Check id-token: write, public repository visibility, and access to Sigstore Fulcio and Rekor.`,
       );
     }
     if (env.DRY_RUN === "true") {
@@ -315,8 +409,10 @@ export async function publishRelease({
         retry: { retries: 0 },
       });
     } catch (error) {
+      const code =
+        isRecord(error) && typeof error.code === "string" ? error.code : "unknown error";
       throw new Error(
-        `npm upload failed or its result is unknown (${error.code ?? "unknown error"}): ${error.message}. Check the trusted publisher allows direct publishing and inspect npm for ${packageName}@${manifest.version} before retrying. No account-token fallback was attempted.`,
+        `npm upload failed or its result is unknown (${code}): ${errorMessage(error)}. Check the trusted publisher allows direct publishing and inspect npm for ${packageName}@${manifest.version} before retrying. No account-token fallback was attempted.`,
       );
     }
     await verifyPublished(manifest.version, `sha512-${digest.toString("base64")}`, fetch);
@@ -326,8 +422,8 @@ export async function publishRelease({
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  publishRelease().catch((error) => {
-    const message = error.message
+  publishRelease().catch((error: unknown) => {
+    const message = errorMessage(error)
       .replaceAll("%", "%25")
       .replaceAll("\r", "%0D")
       .replaceAll("\n", "%0A");

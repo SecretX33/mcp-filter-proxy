@@ -35,8 +35,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
-    "format": "prettier --check --cache src tests",
-    "format:write": "prettier --write --cache src tests"
+    "format": "prettier --check --cache src tests .github/scripts",
+    "format:write": "prettier --write --cache src tests .github/scripts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

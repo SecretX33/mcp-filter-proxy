@@ -63,7 +63,7 @@ jobs:
       - name: Check publishing tooling
         run: |
           export NPM_DIRECTORY="$(npm root --global)/npm"
-          node --input-type=module -e 'import { loadNpm } from "./.github/scripts/publish.js"; loadNpm(process.env.NPM_DIRECTORY)'
+          node --input-type=module -e 'import { loadNpm } from "./.github/scripts/publish.ts"; loadNpm(process.env.NPM_DIRECTORY)'
 
       - name: Download release asset
         env:
@@ -83,4 +83,4 @@ jobs:
         run: |
           export NPM_DIRECTORY="$(npm root --global)/npm"
           export RELEASE_TARBALL="$RUNNER_TEMP/npm-release/mcp-filter-proxy-${RELEASE_VERSION}.tgz"
-          node .github/scripts/publish.js
+          node .github/scripts/publish.ts
