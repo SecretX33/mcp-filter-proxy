@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
 import {
   loadNpm,
@@ -48,7 +49,10 @@ afterAll(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+beforeEach(() => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.mocked(setTimeout).mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => vi.restoreAllMocks());
 
 function fixture(
@@ -375,6 +379,89 @@ for (const [field, message] of [
     assert.equal(state.npm.publish.mock.calls.length, 1);
   });
 }
+
+test("waits for npm publication visibility and verifies without repeating the upload", async () => {
+  const state = fixture();
+  let now = Date.now();
+  const startedAt = now;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.mocked(setTimeout).mockImplementation(async (delay) => {
+    now += delay ?? 0;
+  });
+  const fetch = state.fetch.getMockImplementation();
+  assert.ok(fetch);
+  const verificationTimes: number[] = [];
+  state.fetch.mockImplementation(async (url, options) => {
+    if (state.events.includes("publish")) {
+      verificationTimes.push(now - startedAt);
+      if (now - startedAt < 90_000) return new Response(null, { status: 404 });
+    }
+    return fetch(url, options);
+  });
+  await publishRelease(state);
+  assert.deepEqual(
+    verificationTimes,
+    [0, 15_000, 30_000, 45_000, 60_000, 75_000, 90_000],
+  );
+  assert.equal(state.npm.publish.mock.calls.length, 1);
+  const messages = vi.mocked(console.error).mock.calls.flat().map(String).join("\n");
+  assert.match(messages, /Upload accepted by npm/);
+  assert.match(messages, /HTTP 404.*Retrying in 15 seconds/);
+  assert.match(messages, /Verified mcp-filter-proxy@0.1.4/);
+});
+
+test("stops verification after three minutes and reports that upload already completed", async () => {
+  const state = fixture();
+  let now = Date.now();
+  const startedAt = now;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.mocked(setTimeout).mockImplementation(async (delay) => {
+    now += delay ?? 0;
+  });
+  const fetch = state.fetch.getMockImplementation();
+  assert.ok(fetch);
+  let verificationRequests = 0;
+  state.fetch.mockImplementation(async (url, options) => {
+    if (state.events.includes("publish")) {
+      verificationRequests++;
+      return new Response(null, { status: 404 });
+    }
+    return fetch(url, options);
+  });
+  await assert.rejects(
+    publishRelease(state),
+    /Upload completed.*within 180 seconds.*HTTP 404.*may already be public/,
+  );
+  assert.equal(now - startedAt, 180_000);
+  assert.equal(verificationRequests, 12);
+  assert.equal(state.npm.publish.mock.calls.length, 1);
+});
+
+test("slow metadata requests consume the verification deadline", async () => {
+  const state = fixture();
+  let now = Date.now();
+  const startedAt = now;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.mocked(setTimeout).mockImplementation(async (delay) => {
+    now += delay ?? 0;
+  });
+  const fetch = state.fetch.getMockImplementation();
+  assert.ok(fetch);
+  const verificationSignals: AbortSignal[] = [];
+  state.fetch.mockImplementation(async (url, options) => {
+    if (state.events.includes("publish")) {
+      assert.ok(options?.signal);
+      verificationSignals.push(options.signal);
+      now += 30_000;
+      return new Response(null, { status: 503 });
+    }
+    return fetch(url, options);
+  });
+  await assert.rejects(publishRelease(state), /within 180 seconds.*HTTP 503/);
+  assert.equal(now - startedAt, 180_000);
+  assert.equal(verificationSignals.length, 4);
+  assert.equal(state.npm.publish.mock.calls.length, 1);
+});
 
 test.skipIf(!process.env.NPM_DIRECTORY)(
   "pinned npm exposes the required publishing and provenance helpers",

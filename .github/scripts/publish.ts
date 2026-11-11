@@ -99,12 +99,13 @@ async function request(
   options: RequestInit,
   context: string,
   fetch: typeof globalThis.fetch,
+  timeoutMs = 30_000,
 ) {
   try {
     return await fetch(url, {
       ...options,
       redirect: "error",
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new Error(
@@ -342,8 +343,17 @@ async function verifyPublished(
   integrity: string,
   fetch: typeof globalThis.fetch,
 ) {
-  let problem;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  const verificationWindowMs = 180_000;
+  const retryIntervalMs = 15_000;
+  const deadline = Date.now() + verificationWindowMs;
+  const maxAttempts = verificationWindowMs / retryIntervalMs + 1;
+  let problem = "npm metadata was not available before the verification deadline";
+  console.error(
+    "Upload accepted by npm. Checking public release metadata for up to 180 seconds.",
+  );
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
     try {
       const response = await request(
         `${registry}${packageName}/${version}`,
@@ -352,6 +362,7 @@ async function verifyPublished(
         },
         "Checking published npm metadata",
         fetch,
+        Math.min(30_000, remainingMs),
       );
       if (!response.ok) throw new Error(`npm metadata returned HTTP ${response.status}`);
       const metadata = await responseJson(response, "Published npm metadata");
@@ -378,11 +389,17 @@ async function verifyPublished(
       return;
     } catch (error) {
       problem = errorMessage(error);
-      if (attempt < 4) await setTimeout(2_000);
+      const remainingMs = deadline - Date.now();
+      if (attempt === maxAttempts || remainingMs <= 0) break;
+      const retryDelayMs = Math.min(retryIntervalMs, remainingMs);
+      console.error(
+        `Public release verification pending (attempt ${attempt}, ${Math.ceil(remainingMs / 1000)} seconds remaining): ${problem}. Retrying in ${retryDelayMs / 1000} seconds.`,
+      );
+      await setTimeout(retryDelayMs);
     }
   }
   throw new Error(
-    `Upload completed, but release verification failed: ${problem}. The version may already be public. Inspect https://www.npmjs.com/package/${packageName}/v/${version} before retrying; published versions cannot be replaced.`,
+    `Upload completed, but release verification did not succeed within 180 seconds: ${problem}. The version may already be public. Inspect https://www.npmjs.com/package/${packageName}/v/${version} before retrying; published versions cannot be replaced.`,
   );
 }
 
