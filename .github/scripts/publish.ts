@@ -54,6 +54,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function parseTokenExpiry(value: unknown): number {
+  if (typeof value === "string") return Date.parse(value);
+  if (typeof value !== "number" || !Number.isFinite(value)) return NaN;
+  const milliseconds = Math.abs(value) < 1_000_000_000_000 ? value * 1000 : value;
+  return new Date(milliseconds).getTime();
+}
+
 export function loadNpm(directory: string | undefined): NpmPublisher {
   if (!directory)
     throw new Error(
@@ -279,8 +286,7 @@ async function exchangeToken(env: PublishEnvironment, fetch: typeof globalThis.f
   const tokenPresent = typeof token === "string" && token.length > 0;
   if (tokenPresent) console.error(`::add-mask::${token}`);
   const checkedAt = Date.now();
-  const expiresAt =
-    typeof credentials.expires === "string" ? Date.parse(credentials.expires) : NaN;
+  const expiresAt = parseTokenExpiry(credentials.expires);
   const expiryParsed = Number.isFinite(expiresAt);
   const remainingSeconds = expiryParsed
     ? Math.floor((expiresAt - checkedAt) / 1000)
@@ -317,7 +323,8 @@ async function exchangeToken(env: PublishEnvironment, fetch: typeof globalThis.f
   const failures: string[] = [];
   if (!tokenPresent) failures.push("token must be a non-empty string");
   if (credentials.token_type !== "oidc") failures.push('token_type must equal "oidc"');
-  if (typeof credentials.expires !== "string") failures.push("expires must be a string");
+  if (typeof credentials.expires !== "string" && typeof credentials.expires !== "number")
+    failures.push("expires must be a string or number");
   else if (!expiryParsed) failures.push("expires must be a parseable timestamp");
   else if (expiresAt <= checkedAt + 60_000)
     failures.push("token must have more than 60 seconds remaining");

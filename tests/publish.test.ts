@@ -51,7 +51,9 @@ afterAll(async () => {
 beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
 afterEach(() => vi.restoreAllMocks());
 
-function fixture() {
+function fixture(
+  expires: string | number = new Date(Date.now() + 3_600_000).toISOString(),
+) {
   const env = {
     GITHUB_ACTIONS: "true",
     RUNNER_ENVIRONMENT: "github-hosted",
@@ -69,7 +71,7 @@ function fixture() {
   const credentials = {
     token_type: "oidc",
     token: "exchanged-oidc-token",
-    expires: new Date(Date.now() + 3_600_000).toISOString(),
+    expires,
   };
   const bundle = { mediaType: "test-bundle" };
   const events: string[] = [];
@@ -224,7 +226,9 @@ for (const invalid of [
     message: /more than 60 seconds remaining/,
   },
   { credentials: { token: "" }, message: /token must be a non-empty string/ },
-  { credentials: { expires: 1794430000 }, message: /expires must be a string/ },
+  { credentials: { expires: true }, message: /expires must be a string or number/ },
+  { credentials: { expires: 1e100 }, message: /expires must be a parseable timestamp/ },
+  { credentials: { expires: 0 }, message: /more than 60 seconds remaining/ },
 ]) {
   test(`reports invalid exchanged credentials: ${JSON.stringify(invalid.credentials)}`, async () => {
     const state = fixture();
@@ -248,7 +252,7 @@ test("logs successful exchange status and expiry metadata without exposing crede
   assert.ok(diagnostics);
   assert.match(diagnostics, /"tokenPresent":true/);
   assert.match(diagnostics, /"tokenType":"oidc"/);
-  assert.ok(diagnostics.includes(state.credentials.expires));
+  assert.ok(diagnostics.includes(String(state.credentials.expires)));
   assert.match(diagnostics, /"requiredRemainingSeconds":60/);
   const visibleMessages = messages
     .filter((message) => !message.startsWith("::add-mask::"))
@@ -262,10 +266,33 @@ test("logs successful exchange status and expiry metadata without exposing crede
   }
 });
 
+for (const unit of ["seconds", "milliseconds"] as const) {
+  test(`accepts npm's numeric expiry in Unix ${unit}`, async () => {
+    const expiresAt = Math.floor((Date.now() + 3_600_000) / 1000) * 1000;
+    const state = fixture(unit === "seconds" ? expiresAt / 1000 : expiresAt);
+    state.env.DRY_RUN = "true";
+    await publishRelease(state);
+    assert.equal(state.npm.verifyProvenance.mock.calls.length, 1);
+    assert.equal(state.npm.publish.mock.calls.length, 0);
+    const messages = vi.mocked(console.error).mock.calls.flat().map(String).join("\n");
+    assert.ok(messages.includes(new Date(expiresAt).toISOString()));
+    assert.match(messages, /"expires":"number"/);
+    assert.ok(messages.includes("Dry run passed:"));
+  });
+
+  test(`rejects numeric expiry in ${unit} with insufficient lifetime`, async () => {
+    const expiresAt = Date.now() + 30_000;
+    const state = fixture(unit === "seconds" ? Math.floor(expiresAt / 1000) : expiresAt);
+    await assert.rejects(publishRelease(state), /more than 60 seconds remaining/);
+    assert.equal(state.npm.generateProvenance.mock.calls.length, 0);
+    assert.equal(state.npm.publish.mock.calls.length, 0);
+  });
+}
+
 test("missing expiry metadata is identified before signing or upload", async () => {
   const state = fixture();
   Reflect.deleteProperty(state.credentials, "expires");
-  await assert.rejects(publishRelease(state), /expires must be a string/);
+  await assert.rejects(publishRelease(state), /expires must be a string or number/);
   const messages = vi.mocked(console.error).mock.calls.flat().map(String).join("\n");
   assert.match(messages, /"expires":"missing"/);
   assert.match(messages, /"expiresAt":null/);
