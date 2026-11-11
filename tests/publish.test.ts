@@ -214,18 +214,92 @@ test("OIDC exchange rejection includes the calling workflow and never signs or u
 });
 
 for (const invalid of [
-  { token_type: "bearer" },
-  { expires: "invalid" },
-  { expires: new Date(0).toISOString() },
-  { token: "" },
+  { credentials: { token_type: "bearer" }, message: /token_type must equal "oidc"/ },
+  {
+    credentials: { expires: "invalid" },
+    message: /expires must be a parseable timestamp/,
+  },
+  {
+    credentials: { expires: new Date(0).toISOString() },
+    message: /more than 60 seconds remaining/,
+  },
+  { credentials: { token: "" }, message: /token must be a non-empty string/ },
+  { credentials: { expires: 1794430000 }, message: /expires must be a string/ },
 ]) {
-  test(`refuses invalid exchanged credentials: ${JSON.stringify(invalid)}`, async () => {
+  test(`reports invalid exchanged credentials: ${JSON.stringify(invalid.credentials)}`, async () => {
     const state = fixture();
-    Object.assign(state.credentials, invalid);
-    await assert.rejects(publishRelease(state), /valid, unexpired OIDC/);
+    Object.assign(state.credentials, invalid.credentials);
+    await assert.rejects(publishRelease(state), invalid.message);
+    assert.equal(state.npm.generateProvenance.mock.calls.length, 0);
     assert.equal(state.npm.publish.mock.calls.length, 0);
   });
 }
+
+test("logs successful exchange status and expiry metadata without exposing credentials", async () => {
+  const state = fixture();
+  state.env.DRY_RUN = "true";
+  await publishRelease(state);
+  const messages = vi.mocked(console.error).mock.calls.flat().map(String);
+  assert.ok(messages.includes("GitHub OIDC identity response: HTTP 200."));
+  assert.ok(messages.includes("npm OIDC exchange response: HTTP 201."));
+  const diagnostics = messages.find((message) =>
+    message.startsWith("npm OIDC exchange diagnostics:"),
+  );
+  assert.ok(diagnostics);
+  assert.match(diagnostics, /"tokenPresent":true/);
+  assert.match(diagnostics, /"tokenType":"oidc"/);
+  assert.ok(diagnostics.includes(state.credentials.expires));
+  assert.match(diagnostics, /"requiredRemainingSeconds":60/);
+  const visibleMessages = messages
+    .filter((message) => !message.startsWith("::add-mask::"))
+    .join("\n");
+  for (const secret of [
+    identity,
+    state.credentials.token,
+    state.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+  ]) {
+    assert.ok(!visibleMessages.includes(secret));
+  }
+});
+
+test("missing expiry metadata is identified before signing or upload", async () => {
+  const state = fixture();
+  Reflect.deleteProperty(state.credentials, "expires");
+  await assert.rejects(publishRelease(state), /expires must be a string/);
+  const messages = vi.mocked(console.error).mock.calls.flat().map(String).join("\n");
+  assert.match(messages, /"expires":"missing"/);
+  assert.match(messages, /"expiresAt":null/);
+  assert.equal(state.npm.generateProvenance.mock.calls.length, 0);
+  assert.equal(state.npm.publish.mock.calls.length, 0);
+});
+
+test("diagnostics and validation errors omit credentials even if echoed in metadata", async () => {
+  const state = fixture();
+  state.credentials.token_type = identity;
+  state.credentials.expires = state.credentials.token;
+  Object.assign(state.credentials, { debug: state.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN });
+  await assert.rejects(publishRelease(state), (error) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /token_type must equal "oidc"/);
+    assert.match(error.message, /expires must be a parseable timestamp/);
+    const visibleMessages = vi
+      .mocked(console.error)
+      .mock.calls.flat()
+      .map(String)
+      .filter((message) => !message.startsWith("::add-mask::"))
+      .join("\n");
+    for (const secret of [
+      identity,
+      state.credentials.token,
+      state.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+    ]) {
+      assert.ok(!visibleMessages.includes(secret));
+      assert.ok(!error.message.includes(secret));
+    }
+    return true;
+  });
+  assert.equal(state.npm.publish.mock.calls.length, 0);
+});
 
 for (const step of ["generateProvenance", "verifyProvenance"] as const) {
   test(`failure in ${step} aborts before upload, including dry runs`, async () => {

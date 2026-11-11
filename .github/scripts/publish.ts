@@ -218,6 +218,7 @@ async function exchangeToken(env: PublishEnvironment, fetch: typeof globalThis.f
   if (url.protocol !== "https:")
     throw new Error("The GitHub OIDC endpoint must use HTTPS. Publishing is refused.");
   url.searchParams.set("audience", "npm:registry.npmjs.org");
+  console.error("Requesting GitHub OIDC identity for npm:registry.npmjs.org.");
   const identityResponse = await request(
     url,
     {
@@ -226,6 +227,7 @@ async function exchangeToken(env: PublishEnvironment, fetch: typeof globalThis.f
     "Requesting GitHub OIDC identity",
     fetch,
   );
+  console.error(`GitHub OIDC identity response: HTTP ${identityResponse.status}.`);
   if (!identityResponse.ok) {
     throw new Error(
       `GitHub refused the OIDC request (HTTP ${identityResponse.status}). Check id-token: write on the caller and reusable workflow.`,
@@ -266,27 +268,66 @@ async function exchangeToken(env: PublishEnvironment, fetch: typeof globalThis.f
     "Exchanging GitHub identity with npm",
     fetch,
   );
+  console.error(`npm OIDC exchange response: HTTP ${exchangeResponse.status}.`);
   if (!exchangeResponse.ok) {
     throw new Error(
       `npm refused trusted publishing for ${packageName} (HTTP ${exchangeResponse.status}). In npm package Settings > Trusted publishing, authorize repository ${repository}, calling workflow ${workflow}, and its environment if configured. Check that the publisher configuration has not expired.`,
     );
   }
   const credentials = await responseJson(exchangeResponse, "npm OIDC exchange");
-  if (typeof credentials.token === "string" && credentials.token)
-    console.error(`::add-mask::${credentials.token}`);
-  if (
-    credentials.token_type !== "oidc" ||
-    typeof credentials.token !== "string" ||
-    !credentials.token ||
-    typeof credentials.expires !== "string" ||
-    !(Date.parse(credentials.expires) > Date.now() + 60_000)
-  ) {
+  const token = credentials.token;
+  const tokenPresent = typeof token === "string" && token.length > 0;
+  if (tokenPresent) console.error(`::add-mask::${token}`);
+  const checkedAt = Date.now();
+  const expiresAt =
+    typeof credentials.expires === "string" ? Date.parse(credentials.expires) : NaN;
+  const expiryParsed = Number.isFinite(expiresAt);
+  const remainingSeconds = expiryParsed
+    ? Math.floor((expiresAt - checkedAt) / 1000)
+    : null;
+  const tokenType =
+    credentials.token_type === "oidc" ||
+    credentials.token_type === "bearer" ||
+    credentials.token_type === "Bearer"
+      ? credentials.token_type
+      : "unrecognized or missing";
+  const fieldTypes = Object.fromEntries(
+    ["token", "token_type", "created", "expires", "expires_in", "expires_at"].map(
+      (key) => [
+        key,
+        Object.hasOwn(credentials, key)
+          ? credentials[key] === null
+            ? "null"
+            : typeof credentials[key]
+          : "missing",
+      ],
+    ),
+  );
+  console.error(
+    `npm OIDC exchange diagnostics: ${JSON.stringify({
+      fieldTypes,
+      tokenPresent,
+      tokenType,
+      checkedAt: new Date(checkedAt).toISOString(),
+      expiresAt: expiryParsed ? new Date(expiresAt).toISOString() : null,
+      remainingSeconds,
+      requiredRemainingSeconds: 60,
+    })}`,
+  );
+  const failures: string[] = [];
+  if (!tokenPresent) failures.push("token must be a non-empty string");
+  if (credentials.token_type !== "oidc") failures.push('token_type must equal "oidc"');
+  if (typeof credentials.expires !== "string") failures.push("expires must be a string");
+  else if (!expiryParsed) failures.push("expires must be a parseable timestamp");
+  else if (expiresAt <= checkedAt + 60_000)
+    failures.push("token must have more than 60 seconds remaining");
+  if (!tokenPresent || failures.length > 0) {
     throw new Error(
-      "npm did not return a valid, unexpired OIDC publishing token. Account-token fallback is forbidden. Retry the workflow to request fresh credentials.",
+      `npm OIDC response validation failed: ${failures.join("; ")}. See the sanitized exchange diagnostics above. No package was uploaded. Account-token fallback is forbidden.`,
     );
   }
   console.error("npm accepted this workflow as a trusted publisher.");
-  return credentials.token;
+  return token;
 }
 
 async function verifyPublished(
