@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'If true, runs npm publish --dry-run (no actual publish).'
+        description: 'Validate trusted publishing and signed provenance without uploading to npm.'
         required: false
         type: boolean
         default: false
@@ -19,14 +19,10 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'If true, runs npm publish --dry-run (no actual publish).'
+        description: 'Validate trusted publishing and signed provenance without uploading to npm.'
         required: false
         type: boolean
         default: false
-    secrets:
-      NPM_TOKEN:
-        description: 'NPM publish token'
-        required: true
 
 permissions:
   contents: read
@@ -36,6 +32,7 @@ jobs:
   publish:
     if: github.repository == 'SecretX33/mcp-filter-proxy'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
@@ -45,6 +42,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Sanitize tag
         id: sanitize
@@ -55,25 +54,33 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 26
+          package-manager-cache: false
+
+      - name: Install publishing tooling
+        run: npm install --global npm@12.2.2 --ignore-scripts --registry=https://registry.npmjs.org
+
+      - name: Check publishing tooling
+        run: |
+          export NPM_DIRECTORY="$(npm root --global)/npm"
+          node --input-type=module -e 'import { loadNpm } from "./.github/scripts/publish.ts"; loadNpm(process.env.NPM_DIRECTORY)'
 
       - name: Download release asset
-        run: gh release download "${{ steps.sanitize.outputs.tag }}" --pattern "*.tgz"
-
-      - name: List downloaded files
+        env:
+          RELEASE_TAG: ${{ steps.sanitize.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.sanitize.outputs.version }}
         run: |
-          echo "=== Working directory ==="
-          pwd
-          echo "=== All files in current directory ==="
-          ls -la
-          echo "=== TGZ files ==="
-          ls -la *.tgz 2>/dev/null || echo "No .tgz files found!"
+          mkdir -p "$RUNNER_TEMP/npm-release"
+          if ! gh release download "$RELEASE_TAG" --pattern "mcp-filter-proxy-${RELEASE_VERSION}.tgz" --dir "$RUNNER_TEMP/npm-release"; then
+            echo "::error::Cannot download mcp-filter-proxy-${RELEASE_VERSION}.tgz from release ${RELEASE_TAG}. Check that the release and its package asset exist."
+            exit 1
+          fi
 
       - name: Publish to NPM
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.sanitize.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          FLAGS="--access public --provenance"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          npm publish mcp-filter-proxy-${{ steps.sanitize.outputs.version }}.tgz $FLAGS
+          export NPM_DIRECTORY="$(npm root --global)/npm"
+          export RELEASE_TARBALL="$RUNNER_TEMP/npm-release/mcp-filter-proxy-${RELEASE_VERSION}.tgz"
+          node .github/scripts/publish.ts

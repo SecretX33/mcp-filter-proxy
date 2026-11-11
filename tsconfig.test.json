@@ -3,6 +3,6 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["src", "tests"],
+  "include": ["src", "tests", ".github/scripts"],
   "exclude": ["node_modules"]
 }

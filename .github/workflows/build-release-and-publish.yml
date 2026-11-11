@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       dry_run:
-        description: 'If true, runs npm publish --dry-run (no actual publish).'
+        description: 'Validate trusted publishing and signed provenance without uploading to npm.'
         required: false
         type: boolean
         default: false
@@ -31,5 +31,3 @@ jobs:
     with:
       tag: ${{ needs.release.outputs.tag }}
       dry_run: ${{ inputs.dry_run }}
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
