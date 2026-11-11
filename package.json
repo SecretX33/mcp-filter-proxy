@@ -54,5 +54,12 @@
     "tsdown": "0.23.3",
     "typescript": "6.0.3",
     "vitest": "5.0.5"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=26",
+      "onFail": "error"
+    }
   }
 }

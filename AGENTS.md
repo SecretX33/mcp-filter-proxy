@@ -6,7 +6,7 @@ A generic MCP proxy (published as `mcp-filter-proxy`) that wraps any MCP server,
 
 ## Commands
 
-The package manager is **pnpm**. Node 24 is used in CI.
+The package manager is **pnpm**. Node 26 is used in CI.
 
 - `pnpm build` — bundle to `dist/` with tsdown
 - `pnpm dev` — build in watch mode
